@@ -1,0 +1,59 @@
+name: Daily Real Estate Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * *"
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Run daily agent
+        env:
+          REAL_ESTATE_LOCATIONS: ${{ secrets.REAL_ESTATE_LOCATIONS }}
+          LISTING_TYPE: ${{ secrets.LISTING_TYPE }}
+          PRICE_MIN: ${{ secrets.PRICE_MIN }}
+          PRICE_MAX: ${{ secrets.PRICE_MAX }}
+          PROPERTY_TYPES: ${{ secrets.PROPERTY_TYPES }}
+          BEDS_MIN: ${{ secrets.BEDS_MIN }}
+          BEDS_MAX: ${{ secrets.BEDS_MAX }}
+          BATHS_MIN: ${{ secrets.BATHS_MIN }}
+          BATHS_MAX: ${{ secrets.BATHS_MAX }}
+          SQFT_MIN: ${{ secrets.SQFT_MIN }}
+          SQFT_MAX: ${{ secrets.SQFT_MAX }}
+          LOT_SQFT_MIN: ${{ secrets.LOT_SQFT_MIN }}
+          LOT_SQFT_MAX: ${{ secrets.LOT_SQFT_MAX }}
+          YEAR_BUILT_MIN: ${{ secrets.YEAR_BUILT_MIN }}
+          YEAR_BUILT_MAX: ${{ secrets.YEAR_BUILT_MAX }}
+          HOA_MAX: ${{ secrets.HOA_MAX }}
+          PAST_DAYS: ${{ secrets.PAST_DAYS }}
+          LIMIT_PER_LOCATION: ${{ secrets.LIMIT_PER_LOCATION }}
+          TOP_N: ${{ secrets.TOP_N }}
+          SUBJECTIVE_CRITERIA: ${{ secrets.SUBJECTIVE_CRITERIA }}
+          NEGATIVE_KEYWORDS: ${{ secrets.NEGATIVE_KEYWORDS }}
+          POSITIVE_KEYWORDS: ${{ secrets.POSITIVE_KEYWORDS }}
+          ENABLE_OPENAI_SCORING: ${{ secrets.ENABLE_OPENAI_SCORING }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DRY_RUN: ${{ secrets.DRY_RUN }}
+        run: python -m agent.main
