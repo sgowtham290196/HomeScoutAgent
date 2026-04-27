@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -7,6 +8,7 @@ import pytest
 
 from agent.config import load_config
 from agent.emailer import build_email_message, render_html_email, render_text_email, send_email
+from agent.main import _next_run_time
 from agent.fetcher import deduplicate_properties, fetch_properties
 from agent.scoring import rank_properties, score_properties
 
@@ -17,7 +19,7 @@ def sample_env(**overrides: str) -> dict[str, str]:
         "PRICE_MIN": "700000",
         "PRICE_MAX": "1200000",
         "EMAIL_FROM": "from@example.com",
-        "EMAIL_TO": "to@example.com",
+        "EMAIL_TO": "to@example.com,team@example.com",
         "SMTP_HOST": "smtp.example.com",
         "SMTP_PORT": "587",
         "SMTP_USERNAME": "user",
@@ -36,6 +38,8 @@ def sample_env(**overrides: str) -> dict[str, str]:
         "NEGATIVE_KEYWORDS": "fixer,as-is,TLC",
         "ENABLE_OPENAI_SCORING": "false",
         "OPENAI_MODEL": "gpt-4.1-mini",
+        "SCHEDULE_TIME": "17:00",
+        "UPDATE_FREQUENCY": "daily",
         "DRY_RUN": "true",
     }
     env.update(overrides)
@@ -117,8 +121,27 @@ def test_config_parsing_supports_semicolon_locations() -> None:
         "Mountain View, CA",
     ]
     assert config.property_types == ["single_family", "condos", "townhomes"]
+    assert config.email_to == ["to@example.com", "team@example.com"]
+    assert config.schedule_time == "17:00"
+    assert config.update_frequency == "daily"
     assert config.top_n == 2
     assert config.dry_run is True
+
+
+def test_schedule_config_validation() -> None:
+    with pytest.raises(ValueError, match="SCHEDULE_TIME must be in HH:MM 24-hour format"):
+        load_config(sample_env(SCHEDULE_TIME="5PM"))
+
+    with pytest.raises(ValueError, match="UPDATE_FREQUENCY must be either 'daily' or 'hourly'"):
+        load_config(sample_env(UPDATE_FREQUENCY="weekly"))
+
+
+def test_next_run_time_daily_and_hourly() -> None:
+    daily_now = datetime(2026, 4, 26, 16, 30)
+    assert _next_run_time("17:00", "daily", daily_now) == datetime(2026, 4, 26, 17, 0)
+
+    hourly_now = datetime(2026, 4, 26, 16, 45)
+    assert _next_run_time("17:15", "hourly", hourly_now) == datetime(2026, 4, 26, 17, 15)
 
 
 def test_deduplication_prefers_unique_properties() -> None:
@@ -244,6 +267,7 @@ def test_email_rendering_does_not_crash() -> None:
     assert "Daily Real Estate Picks" in html_body
     assert "Why it ranked" in text_body
     assert message["Subject"].startswith("Daily Real Estate Picks")
+    assert message["To"] == "to@example.com, team@example.com"
 
 
 def test_send_email_uses_smtp_when_not_dry_run(monkeypatch) -> None:

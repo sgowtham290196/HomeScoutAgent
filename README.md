@@ -12,7 +12,7 @@ It searches Realtor.com listings through `homeharvest.scrape_property()`, applie
 - scores listings from `0` to `100`
 - explains each score with `score_reason`
 - highlights issues with `red_flags`
-- optionally adds short OpenAI summaries for the finalists
+- optionally uses one compact LLM pass for finalist subjective-fit notes and a short email intro
 - sends a plain text and HTML email, or prints the result in dry-run mode
 
 ## Project Structure
@@ -66,6 +66,8 @@ The real `.env` file is ignored by Git. The example file stays committed.
 - `SMTP_USERNAME`
 - `SMTP_PASSWORD`
 
+`EMAIL_TO` can contain multiple recipients separated by commas.
+
 ### Optional Variables
 
 - `LISTING_TYPE`
@@ -85,6 +87,8 @@ The real `.env` file is ignored by Git. The example file stays committed.
 - `ENABLE_OPENAI_SCORING`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `SCHEDULE_TIME`
+- `UPDATE_FREQUENCY`
 - `DRY_RUN`
 
 ## Example `.env`
@@ -114,9 +118,11 @@ NEGATIVE_KEYWORDS=fixer,TLC,as-is,auction,needs work,fire damage,foundation
 ENABLE_OPENAI_SCORING=false
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4.1-mini
+SCHEDULE_TIME=17:00
+UPDATE_FREQUENCY=daily
 
 EMAIL_FROM=your_email@gmail.com
-EMAIL_TO=your_email@gmail.com
+EMAIL_TO=your_email@gmail.com,partner@example.com
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=your_email@gmail.com
@@ -147,6 +153,23 @@ DRY_RUN=true python -m agent.main
 
 Dry mode prints the full email content instead of sending it.
 
+### Configure local schedule
+
+The built-in local scheduler uses:
+
+- `SCHEDULE_TIME=17:00` by default
+- `UPDATE_FREQUENCY=daily` by default
+
+Supported frequencies:
+
+- `daily`
+- `hourly`
+
+For `daily`, `SCHEDULE_TIME` is the 24-hour send time.
+For `hourly`, the minute portion of `SCHEDULE_TIME` is used.
+
+This local scheduler only works while your machine is awake and the process is still running.
+
 ### Run on Windows
 
 Use the batch launcher:
@@ -155,18 +178,30 @@ Use the batch launcher:
 run_daily_agent.bat
 ```
 
+This sends one email immediately, then keeps the agent running and sends again on the configured schedule.
+
 ### Run on macOS or Linux
 
-Use the shell launcher:
+Use the clickable Finder launcher:
 
 ```bash
-./run_daily_agent.sh
+run_daily_agent.command
 ```
 
-If needed, make it executable once:
+This sends one email immediately, then keeps the agent running and sends again on the configured schedule.
+
+### Stop the local scheduler
+
+Windows:
+
+```bat
+stop_daily_agent.bat
+```
+
+macOS from Finder:
 
 ```bash
-chmod +x run_daily_agent.sh
+stop_daily_agent.command
 ```
 
 ## How Scoring Works
@@ -208,6 +243,7 @@ Each daily email includes:
 - reason for ranking
 - possible concerns
 - primary photo when available
+- supports multiple recipients via comma-separated `EMAIL_TO`
 
 ## Optional OpenAI Summaries
 
@@ -218,9 +254,12 @@ ENABLE_OPENAI_SCORING=true
 OPENAI_API_KEY=your_openai_api_key
 ```
 
-the agent will generate short qualitative summaries for the finalists only.
+the agent will make one low-cost LLM call for the already-ranked finalists. That call is only used to:
 
-The OpenAI step is optional and does not control ranking order.
+- look at subjective criteria fit for the finalists
+- draft a short intro paragraph for the email
+
+The OpenAI step is optional and does not control ranking order. Deterministic scoring remains the primary ranking method.
 
 ## Scheduling
 
@@ -232,10 +271,29 @@ This repo includes:
 
 It supports:
 
-- daily cron runs
+- daily cloud runs that do not depend on your Mac being open
 - manual runs with `workflow_dispatch`
 
 Store your configuration values in GitHub Actions Secrets.
+
+Recommended always-on setup:
+
+1. push this repo to GitHub
+2. open your repo `Settings` -> `Secrets and variables` -> `Actions`
+3. add the same values from `.env` as repository secrets
+4. set `DRY_RUN=false`
+5. let GitHub Actions run the workflow daily in the cloud
+
+Default workflow timing:
+
+- the workflow is set to `00:00 UTC`
+- that is `5:00 PM Pacific` during daylight time
+- during standard time it will run at `4:00 PM Pacific`
+
+Important:
+
+- `SCHEDULE_TIME` and `UPDATE_FREQUENCY` are for the local launcher-based scheduler
+- the GitHub Actions schedule is controlled by the workflow cron expression, not `.env`
 
 ### Local cron example
 

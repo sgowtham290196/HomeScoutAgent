@@ -5,9 +5,9 @@ cd /d "%~dp0"
 
 where py >nul 2>nul
 if %errorlevel%==0 (
-    py -m agent.main --run-now-and-schedule
+    py -m agent.main --stop-scheduler
 ) else (
-    python -m agent.main --run-now-and-schedule
+    python -m agent.main --stop-scheduler
 )
 
 endlocal

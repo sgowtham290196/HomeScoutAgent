@@ -3,7 +3,9 @@ name: Daily Real Estate Agent
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 14 * * *"
+    # 00:00 UTC is 5:00 PM Pacific during daylight time.
+    # GitHub Actions cron does not support timezones, so standard time will shift by one hour.
+    - cron: "0 0 * * *"
 
 jobs:
   run-agent:

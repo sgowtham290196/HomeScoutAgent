@@ -69,6 +69,8 @@ def _search_criteria_lines(config: AgentConfig) -> list[str]:
 
 
 def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
+    email_intro = df.attrs.get("llm_email_intro")
+
     lines = [
         "Daily Real Estate Picks",
         "",
@@ -76,6 +78,9 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
         *[f"- {line}" for line in _search_criteria_lines(config)],
         "",
     ]
+
+    if email_intro:
+        lines.extend([email_intro, ""])
 
     if df.empty:
         lines.append("No matching properties were found today.")
@@ -114,6 +119,7 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
 
 
 def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
+    email_intro = df.attrs.get("llm_email_intro")
     criteria_items = "".join(
         f"<li>{html.escape(line)}</li>"
         for line in _search_criteria_lines(config)
@@ -171,6 +177,11 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
         "<p style=\"margin-top:0;color:#4b5563;\">Top ranked homes from today's HomeHarvest run.</p>"
         "<h2 style=\"font-size:18px;\">Search criteria</h2>"
         f"<ul>{criteria_items}</ul>"
+        + (
+            f"<p style=\"margin:12px 0 16px 0;\">{html.escape(str(email_intro))}</p>"
+            if email_intro
+            else ""
+        )
         + "".join(cards)
         + "</body></html>"
     )
@@ -180,7 +191,7 @@ def build_email_message(df: pd.DataFrame, config: AgentConfig) -> EmailMessage:
     message = EmailMessage()
     message["Subject"] = build_subject(config)
     message["From"] = config.email_from
-    message["To"] = config.email_to
+    message["To"] = config.email_to_display
 
     text_body = render_text_email(df, config)
     html_body = render_html_email(df, config)
@@ -204,4 +215,4 @@ def send_email(df: pd.DataFrame, config: AgentConfig) -> None:
         smtp.login(config.smtp_username, config.smtp_password)
         smtp.send_message(message)
 
-    logger.info("Email sent to %s", config.email_to)
+    logger.info("Email sent to %s", config.email_to_display)

@@ -123,7 +123,7 @@ class AgentConfig(BaseModel):
     price_min: int
     price_max: int
     email_from: str
-    email_to: str
+    email_to: list[str]
     smtp_host: str
     smtp_port: int
     smtp_username: str
@@ -151,6 +151,8 @@ class AgentConfig(BaseModel):
     enable_openai_scoring: bool = False
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    schedule_time: str = "17:00"
+    update_frequency: str = "daily"
     dry_run: bool = False
 
     @field_validator("real_estate_locations")
@@ -160,12 +162,41 @@ class AgentConfig(BaseModel):
             raise ValueError("REAL_ESTATE_LOCATIONS must contain at least one location.")
         return value
 
+    @field_validator("email_to")
+    @classmethod
+    def validate_email_recipients(cls, value: list[str]) -> list[str]:
+        recipients = [item.strip() for item in value if item and item.strip()]
+        if not recipients:
+            raise ValueError("EMAIL_TO must contain at least one recipient.")
+        return recipients
+
     @field_validator("listing_type")
     @classmethod
     def normalize_listing_type(cls, value: str) -> str:
         normalized = value.strip().lower()
         if not normalized:
             raise ValueError("LISTING_TYPE cannot be empty.")
+        return normalized
+
+    @field_validator("update_frequency")
+    @classmethod
+    def normalize_update_frequency(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"daily", "hourly"}:
+            raise ValueError("UPDATE_FREQUENCY must be either 'daily' or 'hourly'.")
+        return normalized
+
+    @field_validator("schedule_time")
+    @classmethod
+    def validate_schedule_time(cls, value: str) -> str:
+        normalized = value.strip()
+        if not re.fullmatch(r"\d{2}:\d{2}", normalized):
+            raise ValueError("SCHEDULE_TIME must be in HH:MM 24-hour format.")
+        hours, minutes = normalized.split(":")
+        hour_value = int(hours)
+        minute_value = int(minutes)
+        if hour_value not in range(24) or minute_value not in range(60):
+            raise ValueError("SCHEDULE_TIME must be a valid 24-hour time.")
         return normalized
 
     @field_validator("property_types", "negative_keywords", "positive_keywords")
@@ -209,6 +240,10 @@ class AgentConfig(BaseModel):
         return ", ".join(self.real_estate_locations)
 
     @property
+    def email_to_display(self) -> str:
+        return ", ".join(self.email_to)
+
+    @property
     def criteria_terms(self) -> list[str]:
         return _criteria_terms(self.subjective_criteria)
 
@@ -223,7 +258,7 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "price_min": _parse_int(env.get("PRICE_MIN"), "PRICE_MIN"),
         "price_max": _parse_int(env.get("PRICE_MAX"), "PRICE_MAX"),
         "email_from": env.get("EMAIL_FROM"),
-        "email_to": env.get("EMAIL_TO"),
+        "email_to": _parse_csv(env.get("EMAIL_TO")),
         "smtp_host": env.get("SMTP_HOST"),
         "smtp_port": _parse_int(env.get("SMTP_PORT"), "SMTP_PORT"),
         "smtp_username": env.get("SMTP_USERNAME"),
@@ -250,6 +285,8 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "enable_openai_scoring": _parse_bool(env.get("ENABLE_OPENAI_SCORING"), default=False),
         "openai_api_key": env.get("OPENAI_API_KEY"),
         "openai_model": env.get("OPENAI_MODEL") or "gpt-4.1-mini",
+        "schedule_time": env.get("SCHEDULE_TIME") or "17:00",
+        "update_frequency": env.get("UPDATE_FREQUENCY") or "daily",
         "dry_run": _parse_bool(env.get("DRY_RUN"), default=False),
     }
 
