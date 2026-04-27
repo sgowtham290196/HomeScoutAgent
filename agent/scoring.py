@@ -62,9 +62,14 @@ def _listing_corpus(row: pd.Series) -> str:
     ]
     parts: list[str] = []
     for field in fields:
-        if field is None or field == "":
+        if field is None:
             continue
-        if pd.isna(field):
+        try:
+            if pd.isna(field):
+                continue
+        except TypeError:
+            pass
+        if isinstance(field, str) and field == "":
             continue
         parts.append(str(field))
     return " ".join(parts).lower()

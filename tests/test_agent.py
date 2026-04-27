@@ -239,6 +239,27 @@ def test_ranking_handles_missing_optional_columns() -> None:
     assert "score" in ranked.columns
 
 
+def test_ranking_handles_pandas_na_text_fields() -> None:
+    config = load_config(sample_env())
+    df = pd.DataFrame(
+        [
+            {
+                "formatted_address": "123 Main St",
+                "text": pd.NA,
+                "nearby_schools": pd.NA,
+                "style": pd.NA,
+                "city": "Santa Clara",
+                "state": "CA",
+            }
+        ]
+    )
+
+    ranked = rank_properties(df, config)
+
+    assert len(ranked) == 1
+    assert "score" in ranked.columns
+
+
 def test_ranking_returns_top_n() -> None:
     config = load_config(sample_env(TOP_N="2"))
     ranked = rank_properties(sample_dataframe(), config)
