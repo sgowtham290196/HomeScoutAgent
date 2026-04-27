@@ -9,6 +9,12 @@ import pandas as pd
 from agent.config import AgentConfig
 
 
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(float("nan"), index=df.index, dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce")
+
+
 def _safe_float(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -207,7 +213,7 @@ def _score_keywords(row: pd.Series, config: AgentConfig) -> tuple[float, list[st
         notes.append(f"negative keywords: {', '.join(sorted(set(negative_matches)))}")
 
     return (
-        round(_clamp(score, 0.0, 15.0), 2),
+        round(_clamp(score, -15.0, 15.0), 2),
         sorted(set(positive_matches + criteria_matches)),
         sorted(set(negative_matches)),
         "; ".join(notes) if notes else None,
@@ -222,7 +228,7 @@ def score_properties(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
         return scored
 
     scored = df.copy()
-    median_ppsf = pd.to_numeric(scored.get("price_per_sqft"), errors="coerce").dropna().median()
+    median_ppsf = _numeric_series(scored, "price_per_sqft").dropna().median()
     if isinstance(median_ppsf, float) and math.isnan(median_ppsf):
         median_ppsf = None
 
@@ -317,10 +323,16 @@ def rank_properties(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
     if scored.empty:
         return scored
 
-    priced = pd.to_numeric(scored.get("list_price"), errors="coerce")
-    ranked = scored.assign(_sort_price=priced.fillna(float("inf"))).sort_values(
-        by=["score", "_sort_price", "days_on_mls"],
+    priced = _numeric_series(scored, "list_price")
+    days_on_mls = _numeric_series(scored, "days_on_mls")
+    ranked = scored.assign(
+        _sort_price=priced.fillna(float("inf")),
+        _sort_days_on_mls=days_on_mls.fillna(float("inf")),
+    ).sort_values(
+        by=["score", "_sort_price", "_sort_days_on_mls"],
         ascending=[False, True, True],
         na_position="last",
     )
-    return ranked.head(config.top_n).drop(columns=["_sort_price"], errors="ignore").reset_index(drop=True)
+    return ranked.head(config.top_n).drop(
+        columns=["_sort_price", "_sort_days_on_mls"], errors="ignore"
+    ).reset_index(drop=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from agent.config import load_config
 from agent.emailer import build_email_message, render_html_email, render_text_email, send_email
@@ -176,6 +177,45 @@ def test_scoring_adds_reason_and_red_flags() -> None:
     assert scored.loc[0, "score"] > scored.loc[1, "score"]
 
 
+def test_negative_keywords_reduce_score() -> None:
+    config = load_config(sample_env(NEGATIVE_KEYWORDS="fixer,as-is", POSITIVE_KEYWORDS=""))
+    df = pd.DataFrame(
+        [
+            {
+                "formatted_address": "Clean Home",
+                "list_price": 900000,
+                "price_per_sqft": 600,
+                "sqft": 1200,
+                "year_built": 1990,
+                "days_on_mls": 5,
+                "text": "well-kept home",
+            },
+            {
+                "formatted_address": "Fixer Home",
+                "list_price": 900000,
+                "price_per_sqft": 600,
+                "sqft": 1200,
+                "year_built": 1990,
+                "days_on_mls": 5,
+                "text": "fixer sold as-is",
+            },
+        ]
+    )
+
+    scored = score_properties(df, config)
+    assert scored.loc[0, "score"] > scored.loc[1, "score"]
+
+
+def test_ranking_handles_missing_optional_columns() -> None:
+    config = load_config(sample_env())
+    df = pd.DataFrame([{"formatted_address": "123 Main St"}])
+
+    ranked = rank_properties(df, config)
+
+    assert len(ranked) == 1
+    assert "score" in ranked.columns
+
+
 def test_ranking_returns_top_n() -> None:
     config = load_config(sample_env(TOP_N="2"))
     ranked = rank_properties(sample_dataframe(), config)
@@ -183,6 +223,14 @@ def test_ranking_returns_top_n() -> None:
     assert len(ranked) == 2
     assert ranked.iloc[0]["property_id"] in {"1", "3"}
     assert ranked.iloc[0]["score"] >= ranked.iloc[1]["score"]
+
+
+def test_invalid_zero_values_are_not_silently_defaulted() -> None:
+    with pytest.raises(ValueError, match="TOP_N must be positive"):
+        load_config(sample_env(TOP_N="0"))
+
+    with pytest.raises(ValueError, match="PAST_DAYS must be positive"):
+        load_config(sample_env(PAST_DAYS="0"))
 
 
 def test_email_rendering_does_not_crash() -> None:

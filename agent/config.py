@@ -214,6 +214,10 @@ class AgentConfig(BaseModel):
 
 
 def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
+    past_days = _parse_int(env.get("PAST_DAYS"), "PAST_DAYS")
+    limit_per_location = _parse_int(env.get("LIMIT_PER_LOCATION"), "LIMIT_PER_LOCATION")
+    top_n = _parse_int(env.get("TOP_N"), "TOP_N")
+
     return {
         "real_estate_locations": _parse_locations(env.get("REAL_ESTATE_LOCATIONS")),
         "price_min": _parse_int(env.get("PRICE_MIN"), "PRICE_MIN"),
@@ -237,9 +241,9 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "year_built_min": _parse_int(env.get("YEAR_BUILT_MIN"), "YEAR_BUILT_MIN"),
         "year_built_max": _parse_int(env.get("YEAR_BUILT_MAX"), "YEAR_BUILT_MAX"),
         "hoa_max": _parse_int(env.get("HOA_MAX"), "HOA_MAX"),
-        "past_days": _parse_int(env.get("PAST_DAYS"), "PAST_DAYS") or 7,
-        "limit_per_location": _parse_int(env.get("LIMIT_PER_LOCATION"), "LIMIT_PER_LOCATION") or 100,
-        "top_n": _parse_int(env.get("TOP_N"), "TOP_N") or 5,
+        "past_days": 7 if past_days is None else past_days,
+        "limit_per_location": 100 if limit_per_location is None else limit_per_location,
+        "top_n": 5 if top_n is None else top_n,
         "subjective_criteria": env.get("SUBJECTIVE_CRITERIA"),
         "negative_keywords": _parse_csv(env.get("NEGATIVE_KEYWORDS")),
         "positive_keywords": _parse_csv(env.get("POSITIVE_KEYWORDS")),

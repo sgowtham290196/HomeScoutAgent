@@ -155,6 +155,20 @@ Use the batch launcher:
 run_daily_agent.bat
 ```
 
+### Run on macOS or Linux
+
+Use the shell launcher:
+
+```bash
+./run_daily_agent.sh
+```
+
+If needed, make it executable once:
+
+```bash
+chmod +x run_daily_agent.sh
+```
+
 ## How Scoring Works
 
 The agent does not hide ranking inside an LLM.
