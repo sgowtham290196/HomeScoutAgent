@@ -16,11 +16,16 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _safe_float(value: object) -> float | None:
-    if value is None or value == "":
+    if value is None:
         return None
     if isinstance(value, pd.Series):
         raise TypeError("_safe_float expects scalar values.")
-    if pd.isna(value):
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    if isinstance(value, str) and value == "":
         return None
     try:
         return float(value)

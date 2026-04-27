@@ -260,6 +260,30 @@ def test_ranking_handles_pandas_na_text_fields() -> None:
     assert "score" in ranked.columns
 
 
+def test_ranking_handles_pandas_na_numeric_fields() -> None:
+    config = load_config(sample_env())
+    df = pd.DataFrame(
+        [
+            {
+                "formatted_address": "123 Main St",
+                "list_price": 900000,
+                "price_per_sqft": 650,
+                "sqft": 1400,
+                "full_baths": 2,
+                "half_baths": pd.NA,
+                "beds": 3,
+                "year_built": 1995,
+                "days_on_mls": 4,
+            }
+        ]
+    )
+
+    ranked = rank_properties(df, config)
+
+    assert len(ranked) == 1
+    assert "score" in ranked.columns
+
+
 def test_ranking_returns_top_n() -> None:
     config = load_config(sample_env(TOP_N="2"))
     ranked = rank_properties(sample_dataframe(), config)
