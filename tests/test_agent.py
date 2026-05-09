@@ -12,6 +12,8 @@ from agent.main import SchedulerAlreadyRunning, _next_run_time, _write_pid_file,
 from agent.fetcher import deduplicate_properties, fetch_properties
 from agent.scoring import rank_properties, score_properties
 from agent.tracker import append_new_report_entries, report_columns
+from homeharvest.core.scrapers import Scraper, ScraperInput
+from homeharvest.core.scrapers.models import ListingType
 from homeharvest.core.scrapers.realtor.processors import process_extra_property_details
 
 
@@ -251,6 +253,16 @@ def test_fetch_properties_uses_scrape_property_mock(monkeypatch) -> None:
     assert len(raw_df) == 6
     assert len(deduped_df) == 4
     assert len(filtered_df) == 4
+
+
+def test_scraper_honors_extra_property_data_flag() -> None:
+    scraper = Scraper(ScraperInput(location="Santa Clara, CA", listing_type=ListingType.FOR_SALE))
+    disabled_scraper = Scraper(
+        ScraperInput(location="Santa Clara, CA", listing_type=ListingType.FOR_SALE, extra_property_data=False)
+    )
+
+    assert scraper.extra_property_data is True
+    assert disabled_scraper.extra_property_data is False
 
 
 def test_process_extra_property_details_extracts_assigned_greatschools_ratings() -> None:
@@ -515,8 +527,12 @@ def test_email_rendering_does_not_crash() -> None:
     assert "Assigned GreatSchools ratings" in text_body
     assert "Assigned schools" in text_body
     assert "Primary: North Elementary (9/10)" in text_body
-    assert "Detailed analysis" in text_body
+    assert "Strengths:" in text_body
+    assert "- above-average usable square footage" in text_body
     assert "Score breakdown" in html_body
+    assert "<li>Price:" in html_body
+    assert "<li>above-average usable square footage" in html_body
+    assert "Detailed analysis:" not in html_body
     assert "LLM field scores" in text_body
     assert "Safety: 8/10" in html_body
     assert "Zillow" in text_body

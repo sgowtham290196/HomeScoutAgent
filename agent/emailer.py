@@ -85,6 +85,55 @@ def _assigned_school_lines(row: pd.Series) -> list[str]:
     return lines
 
 
+def _split_display_items(value: object, *, separator: str = ";") -> list[str]:
+    text = _display_text(value, default="")
+    if not text:
+        return []
+    return [part.strip() for part in text.split(separator) if part.strip()]
+
+
+def _analysis_sections(value: object) -> list[tuple[str, list[str]]]:
+    text = _display_text(value, default="")
+    if not text:
+        return []
+
+    sections: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        if ":" not in clean_line:
+            sections.append(("Notes", [clean_line]))
+            continue
+        title, detail = clean_line.split(":", maxsplit=1)
+        separator = "|" if title.strip().lower() == "score breakdown" else ";"
+        items = _split_display_items(detail, separator=separator)
+        sections.append((title.strip(), items or [detail.strip()]))
+    return sections
+
+
+def _score_breakdown_items(value: object) -> list[str]:
+    return _split_display_items(value, separator="|")
+
+
+def _text_section_lines(title: str, items: list[str]) -> list[str]:
+    if not items:
+        return []
+    return [f"{title}:", *[f"- {item}" for item in items]]
+
+
+def _html_list_section(title: str, items: list[str]) -> str:
+    if not items:
+        return ""
+    items_html = "".join(f"<li>{html.escape(item)}</li>" for item in items)
+    return (
+        f'<div style="margin:10px 0;">'
+        f'<p style="margin:0 0 4px 0;"><strong>{html.escape(title)}:</strong></p>'
+        f'<ul style="margin:0 0 0 20px;padding:0;">{items_html}</ul>'
+        f'</div>'
+    )
+
+
 def _llm_assessment_lines(row: pd.Series) -> list[str]:
     lines: list[str] = []
     for field in LLM_ASSESSMENT_FIELDS:
@@ -172,11 +221,14 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
                 f"Days on market: {_display_text(row.get('days_on_mls'))}",
                 f"Assigned schools: {'; '.join(_assigned_school_lines(row)) or 'n/a'}",
                 f"Why it ranked: {_display_text(row.get('score_reason'))}",
-                f"Score breakdown: {_display_text(row.get('score_breakdown'))}",
-                f"Detailed analysis: {_display_text(row.get('detailed_analysis'))}",
-                f"Possible concerns: {_display_text(row.get('red_flags'))}",
             ]
         )
+        lines.extend(_text_section_lines("Score breakdown", _score_breakdown_items(row.get("score_breakdown"))))
+        for section_title, section_items in _analysis_sections(row.get("detailed_analysis")):
+            if section_title.lower() == "score breakdown":
+                continue
+            lines.extend(_text_section_lines(section_title, section_items))
+        lines.append(f"Possible concerns: {_display_text(row.get('red_flags'))}")
         if row.get("llm_summary"):
             lines.append(f"Summary: {row.get('llm_summary')}")
         if row.get("llm_criteria_match"):
@@ -241,6 +293,16 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
                     f"{html.escape(str(row.get('llm_research_sources')))}</p>"
                 )
 
+            score_breakdown_html = _html_list_section(
+                "Score breakdown",
+                _score_breakdown_items(row.get("score_breakdown")),
+            )
+            analysis_html = ""
+            for section_title, section_items in _analysis_sections(row.get("detailed_analysis")):
+                if section_title.lower() == "score breakdown":
+                    continue
+                analysis_html += _html_list_section(section_title, section_items)
+
             links_html = (
                 f'<p style="margin:8px 0 0 0;"><a href="{html.escape(_display_text(row.get("property_url"), "#"))}">View listing</a></p>'
             )
@@ -262,8 +324,8 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
                   <p style="margin:4px 0;"><strong>Days on market:</strong> {html.escape(_display_text(row.get('days_on_mls')))}</p>
                   <p style="margin:4px 0;"><strong>Assigned schools:</strong> {html.escape('; '.join(_assigned_school_lines(row)) or 'n/a')}</p>
                   <p style="margin:4px 0;"><strong>Why it ranked:</strong> {html.escape(_display_text(row.get('score_reason')))}</p>
-                  <p style="margin:4px 0;"><strong>Score breakdown:</strong> {html.escape(_display_text(row.get('score_breakdown')))}</p>
-                  <p style="margin:4px 0; white-space:pre-line;"><strong>Detailed analysis:</strong> {html.escape(_display_text(row.get('detailed_analysis')))}</p>
+                  {score_breakdown_html}
+                  {analysis_html}
                   <p style="margin:4px 0;"><strong>Possible concerns:</strong> {html.escape(_display_text(row.get('red_flags')))}</p>
                   {llm_html}
                   {photo_html}
