@@ -554,8 +554,29 @@ fragment PropertyResult on Home {
             fulfillment_id
         }
     }
+    assignedSchools: assigned_schools(query: {limit_per_level: 1, include_suppressed_schools: true}) {
+        __typename
+        schools {
+            __typename
+            name
+            education_levels
+            rating
+            assigned
+            greatschools_id
+            district { __typename id name }
+        }
+    }
     nearbySchools: nearby_schools(radius: 5.0, limit_per_level: 3) {
-        __typename schools { district { __typename id name } }
+        __typename
+        schools {
+            __typename
+            name
+            education_levels
+            rating
+            assigned
+            greatschools_id
+            district { __typename id name }
+        }
     }
     popularity {
         periods {
@@ -609,8 +630,29 @@ fragment PropertyResult on Home {
 """
 
 HOMES_DATA = """%s
+                assignedSchools: assigned_schools(query: {limit_per_level: 1, include_suppressed_schools: true}) {
+                            __typename
+                            schools {
+                                __typename
+                                name
+                                education_levels
+                                rating
+                                assigned
+                                greatschools_id
+                                district { __typename id name }
+                            }
+                        }
                 nearbySchools: nearby_schools(radius: 5.0, limit_per_level: 3) {
-                            __typename schools { district { __typename id name } }
+                            __typename
+                            schools {
+                                __typename
+                                name
+                                education_levels
+                                rating
+                                assigned
+                                greatschools_id
+                                district { __typename id name }
+                            }
                         }
                 monthly_fees {
                     description

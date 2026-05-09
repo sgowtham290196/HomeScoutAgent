@@ -4,10 +4,12 @@ import html
 import logging
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import quote_plus
 
 import pandas as pd
 
 from agent.config import AgentConfig
+from agent.llm_scorer import LLM_ASSESSMENT_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,10 @@ def _display_text(value: object, default: str = "n/a") -> str:
     except TypeError:
         pass
     return str(value)
+
+
+def _has_display_value(value: object) -> bool:
+    return _display_text(value, default="") != ""
 
 
 def _format_currency(value: object) -> str:
@@ -39,6 +45,58 @@ def _format_number(value: object) -> str:
         return f"{float(value):,.0f}"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _format_score(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _display_text(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.1f}".rstrip("0").rstrip(".")
+
+
+def _zillow_search_url(row: pd.Series) -> str | None:
+    address = _display_text(row.get("formatted_address"), default="")
+    if not address:
+        return None
+    return f"https://www.zillow.com/homes/{quote_plus(address)}_rb/"
+
+
+def _assessment_label(field: str) -> str:
+    return field.replace("_", " ").title()
+
+
+def _assigned_school_lines(row: pd.Series) -> list[str]:
+    school_fields = [
+        ("Primary", "assigned_primary_school", "assigned_primary_school_rating"),
+        ("Middle", "assigned_middle_school", "assigned_middle_school_rating"),
+        ("High", "assigned_high_school", "assigned_high_school_rating"),
+    ]
+    lines: list[str] = []
+    for label, name_column, rating_column in school_fields:
+        name = _display_text(row.get(name_column), default="")
+        rating = row.get(rating_column)
+        if not name and not _has_display_value(rating):
+            continue
+        rating_text = f" ({_format_score(rating)}/10)" if _has_display_value(rating) else ""
+        lines.append(f"{label}: {name or 'assigned school'}{rating_text}")
+    return lines
+
+
+def _llm_assessment_lines(row: pd.Series) -> list[str]:
+    lines: list[str] = []
+    for field in LLM_ASSESSMENT_FIELDS:
+        score = row.get(f"llm_{field}_score")
+        comment = row.get(f"llm_{field}_comment")
+        if not _has_display_value(score) and not _has_display_value(comment):
+            continue
+        score_text = f"{_format_score(score)}/10" if _has_display_value(score) else "n/a"
+        comment_text = _display_text(comment, default="")
+        suffix = f" - {comment_text}" if comment_text else ""
+        lines.append(f"{_assessment_label(field)}: {score_text}{suffix}")
+    return lines
 
 
 def build_subject(config: AgentConfig) -> str:
@@ -63,6 +121,15 @@ def _search_criteria_lines(config: AgentConfig) -> list[str]:
     ]
     if beds_baths:
         lines.append("Beds/Baths: " + ", ".join(beds_baths))
+    school_filters = []
+    if config.min_assigned_primary_school_rating is not None:
+        school_filters.append(f"primary {config.min_assigned_primary_school_rating}+")
+    if config.min_assigned_middle_school_rating is not None:
+        school_filters.append(f"middle {config.min_assigned_middle_school_rating}+")
+    if config.min_assigned_high_school_rating is not None:
+        school_filters.append(f"high {config.min_assigned_high_school_rating}+")
+    if school_filters:
+        lines.append("Assigned GreatSchools ratings: " + ", ".join(school_filters))
     if config.subjective_criteria:
         lines.append(f"Subjective criteria: {config.subjective_criteria}")
     return lines
@@ -87,6 +154,7 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
         return "\n".join(lines)
 
     for index, row in df.reset_index(drop=True).iterrows():
+        zillow_url = _zillow_search_url(row)
         lines.extend(
             [
                 f"#{index + 1} - {_display_text(row.get('formatted_address'), 'Unknown address')}",
@@ -102,7 +170,10 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
                 f"HOA: {_format_currency(row.get('hoa_fee'))}",
                 f"Price/sqft: {_format_currency(row.get('price_per_sqft'))}",
                 f"Days on market: {_display_text(row.get('days_on_mls'))}",
+                f"Assigned schools: {'; '.join(_assigned_school_lines(row)) or 'n/a'}",
                 f"Why it ranked: {_display_text(row.get('score_reason'))}",
+                f"Score breakdown: {_display_text(row.get('score_breakdown'))}",
+                f"Detailed analysis: {_display_text(row.get('detailed_analysis'))}",
                 f"Possible concerns: {_display_text(row.get('red_flags'))}",
             ]
         )
@@ -112,7 +183,15 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
             lines.append(f"Criteria match: {row.get('llm_criteria_match')}")
         if row.get("llm_possible_concern"):
             lines.append(f"LLM concern: {row.get('llm_possible_concern')}")
+        assessment_lines = _llm_assessment_lines(row)
+        if assessment_lines:
+            lines.append("LLM field scores:")
+            lines.extend([f"- {line}" for line in assessment_lines])
+        if _has_display_value(row.get("llm_research_sources")):
+            lines.append(f"LLM research sources: {row.get('llm_research_sources')}")
         lines.append(f"Link: {_display_text(row.get('property_url'))}")
+        if zillow_url:
+            lines.append(f"Zillow: {zillow_url}")
         lines.append("")
 
     return "\n".join(lines).strip()
@@ -130,6 +209,7 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
         cards.append("<p>No matching properties were found today.</p>")
     else:
         for index, row in df.reset_index(drop=True).iterrows():
+            zillow_url = _zillow_search_url(row)
             photo_html = ""
             if row.get("primary_photo"):
                 photo_html = (
@@ -150,6 +230,24 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
                     f"<p><strong>LLM concern:</strong> "
                     f"{html.escape(str(row.get('llm_possible_concern')))}</p>"
                 )
+            assessment_lines = _llm_assessment_lines(row)
+            if assessment_lines:
+                llm_html += "<p style=\"margin:8px 0 4px 0;\"><strong>LLM field scores:</strong></p><ul>"
+                llm_html += "".join(f"<li>{html.escape(line)}</li>" for line in assessment_lines)
+                llm_html += "</ul>"
+            if _has_display_value(row.get("llm_research_sources")):
+                llm_html += (
+                    f"<p><strong>LLM research sources:</strong> "
+                    f"{html.escape(str(row.get('llm_research_sources')))}</p>"
+                )
+
+            links_html = (
+                f'<p style="margin:8px 0 0 0;"><a href="{html.escape(_display_text(row.get("property_url"), "#"))}">View listing</a></p>'
+            )
+            if zillow_url:
+                links_html += (
+                    f'<p style="margin:4px 0 0 0;"><a href="{html.escape(zillow_url)}">Open in Zillow search</a></p>'
+                )
 
             cards.append(
                 f"""
@@ -162,11 +260,14 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
                   <p style="margin:4px 0;"><strong>HOA:</strong> {_format_currency(row.get('hoa_fee'))}</p>
                   <p style="margin:4px 0;"><strong>Price/sqft:</strong> {_format_currency(row.get('price_per_sqft'))}</p>
                   <p style="margin:4px 0;"><strong>Days on market:</strong> {html.escape(_display_text(row.get('days_on_mls')))}</p>
+                  <p style="margin:4px 0;"><strong>Assigned schools:</strong> {html.escape('; '.join(_assigned_school_lines(row)) or 'n/a')}</p>
                   <p style="margin:4px 0;"><strong>Why it ranked:</strong> {html.escape(_display_text(row.get('score_reason')))}</p>
+                  <p style="margin:4px 0;"><strong>Score breakdown:</strong> {html.escape(_display_text(row.get('score_breakdown')))}</p>
+                  <p style="margin:4px 0; white-space:pre-line;"><strong>Detailed analysis:</strong> {html.escape(_display_text(row.get('detailed_analysis')))}</p>
                   <p style="margin:4px 0;"><strong>Possible concerns:</strong> {html.escape(_display_text(row.get('red_flags')))}</p>
                   {llm_html}
                   {photo_html}
-                  <p style="margin:8px 0 0 0;"><a href="{html.escape(_display_text(row.get('property_url'), '#'))}">View listing</a></p>
+                  {links_html}
                 </div>
                 """
             )

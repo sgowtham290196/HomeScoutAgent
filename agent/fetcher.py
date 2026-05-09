@@ -65,6 +65,13 @@ def deduplicate_properties(df: pd.DataFrame) -> pd.DataFrame:
     return deduped.reset_index(drop=True)
 
 
+def _rating_meets_min(series: pd.Series, minimum: int | None) -> pd.Series:
+    if minimum is None:
+        return pd.Series(True, index=series.index)
+    ratings = pd.to_numeric(series, errors="coerce")
+    return ratings.notna() & (ratings >= minimum)
+
+
 def apply_client_side_filters(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -74,6 +81,19 @@ def apply_client_side_filters(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
     if config.hoa_max is not None and "hoa_fee" in filtered.columns:
         hoa_values = pd.to_numeric(filtered["hoa_fee"], errors="coerce")
         filtered = filtered[(hoa_values.isna()) | (hoa_values <= config.hoa_max)]
+
+    school_rating_filters = [
+        ("assigned_primary_school_rating", config.min_assigned_primary_school_rating),
+        ("assigned_middle_school_rating", config.min_assigned_middle_school_rating),
+        ("assigned_high_school_rating", config.min_assigned_high_school_rating),
+    ]
+    for column, minimum in school_rating_filters:
+        if minimum is None:
+            continue
+        if column not in filtered.columns:
+            filtered = filtered.iloc[0:0]
+            break
+        filtered = filtered[_rating_meets_min(filtered[column], minimum)]
 
     return filtered.reset_index(drop=True)
 

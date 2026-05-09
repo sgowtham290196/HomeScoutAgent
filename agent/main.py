@@ -9,13 +9,21 @@ from pathlib import Path
 import signal
 import time
 
-from agent.config import load_config
+from agent.config import AgentConfig, load_config
 from agent.emailer import send_email
 from agent.fetcher import fetch_properties
 from agent.llm_scorer import enrich_finalists_with_llm
 from agent.scoring import rank_properties
+from agent.tracker import append_new_report_entries
 
 PID_FILE = Path(".agent_scheduler.pid")
+
+
+class SchedulerAlreadyRunning(RuntimeError):
+    def __init__(self, pid: int) -> None:
+        super().__init__(f"Scheduler already running with pid {pid}.")
+        self.pid = pid
+
 
 
 def configure_logging() -> None:
@@ -25,9 +33,9 @@ def configure_logging() -> None:
     )
 
 
-def run_agent_once() -> None:
+def run_agent_once(config: AgentConfig | None = None) -> None:
     logger = logging.getLogger(__name__)
-    config = load_config()
+    config = config or load_config()
     logger.info("Loaded config for %s locations", len(config.real_estate_locations))
 
     raw_df, deduped_df, filtered_df = fetch_properties(config)
@@ -37,8 +45,10 @@ def run_agent_once() -> None:
 
     ranked_df = rank_properties(filtered_df, config)
     enriched_df = enrich_finalists_with_llm(ranked_df, config)
+    new_tracker_rows = append_new_report_entries(enriched_df, config)
 
     logger.info("Prepared top %s properties for email", len(enriched_df))
+    logger.info("Added %s new properties to report tracker", len(new_tracker_rows))
     send_email(enriched_df, config)
 
 
@@ -73,10 +83,7 @@ def _write_pid_file() -> None:
             existing_pid = None
 
         if existing_pid and _is_process_running(existing_pid):
-            raise RuntimeError(
-                f"Scheduler appears to already be running with pid {existing_pid}. "
-                f"Use the stop launcher first if needed."
-            )
+            raise SchedulerAlreadyRunning(existing_pid)
         _remove_pid_file()
 
     PID_FILE.write_text(f"{current_pid}\n")
@@ -118,10 +125,11 @@ def _next_run_time(config_schedule_time: str, update_frequency: str, now: dateti
     return scheduled
 
 
-def run_scheduler() -> None:
+def run_scheduler(config: AgentConfig | None = None, *, pid_file_written: bool = False) -> None:
     logger = logging.getLogger(__name__)
-    config = load_config()
-    _write_pid_file()
+    config = config or load_config()
+    if not pid_file_written:
+        _write_pid_file()
     logger.info(
         "Scheduler enabled with frequency=%s at %s",
         config.update_frequency,
@@ -174,8 +182,18 @@ def main() -> None:
         return
 
     if args.run_now_and_schedule:
-        run_agent_once()
-        run_scheduler()
+        config = load_config()
+        try:
+            _write_pid_file()
+        except SchedulerAlreadyRunning as exc:
+            logger.info(
+                "Scheduler is already running with pid %s. Not starting another scheduler or duplicate run.",
+                exc.pid,
+            )
+            logger.info("Use the stop launcher first if you want to restart it.")
+            return
+        run_agent_once(config)
+        run_scheduler(config, pid_file_written=True)
         return
 
     run_agent_once()

@@ -70,6 +70,13 @@ ordered_properties = [
     "office_email",
     "office_phones",
     "nearby_schools",
+    "assigned_schools",
+    "assigned_primary_school",
+    "assigned_primary_school_rating",
+    "assigned_middle_school",
+    "assigned_middle_school_rating",
+    "assigned_high_school",
+    "assigned_high_school_rating",
     "primary_photo",
     "alt_photos"
 ]

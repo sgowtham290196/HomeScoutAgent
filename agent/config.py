@@ -142,6 +142,9 @@ class AgentConfig(BaseModel):
     year_built_min: int | None = None
     year_built_max: int | None = None
     hoa_max: int | None = None
+    min_assigned_primary_school_rating: int | None = 8
+    min_assigned_middle_school_rating: int | None = 8
+    min_assigned_high_school_rating: int | None = 8
     past_days: int = 7
     limit_per_location: int = 100
     top_n: int = 5
@@ -149,8 +152,10 @@ class AgentConfig(BaseModel):
     negative_keywords: list[str] = Field(default_factory=list)
     positive_keywords: list[str] = Field(default_factory=list)
     enable_openai_scoring: bool = False
+    enable_openai_web_search: bool = True
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    report_tracker_path: str = "reports/live_report_tracker.csv"
     schedule_time: str = "17:00"
     update_frequency: str = "daily"
     dry_run: bool = False
@@ -233,6 +238,16 @@ class AgentConfig(BaseModel):
         if self.past_days <= 0:
             raise ValueError("PAST_DAYS must be positive.")
 
+        school_rating_fields = [
+            "min_assigned_primary_school_rating",
+            "min_assigned_middle_school_rating",
+            "min_assigned_high_school_rating",
+        ]
+        for field_name in school_rating_fields:
+            value = getattr(self, field_name)
+            if value is not None and value not in range(1, 11):
+                raise ValueError(f"{field_name.upper()} must be between 1 and 10.")
+
         return self
 
     @property
@@ -252,6 +267,10 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
     past_days = _parse_int(env.get("PAST_DAYS"), "PAST_DAYS")
     limit_per_location = _parse_int(env.get("LIMIT_PER_LOCATION"), "LIMIT_PER_LOCATION")
     top_n = _parse_int(env.get("TOP_N"), "TOP_N")
+    min_middle_school_rating = _parse_int(
+        env.get("MIN_ASSIGNED_MIDDLE_SCHOOL_RATING") or env.get("MIN_ASSIGNED_MID_SCHOOL_RATING"),
+        "MIN_ASSIGNED_MIDDLE_SCHOOL_RATING",
+    )
 
     return {
         "real_estate_locations": _parse_locations(env.get("REAL_ESTATE_LOCATIONS")),
@@ -276,6 +295,13 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "year_built_min": _parse_int(env.get("YEAR_BUILT_MIN"), "YEAR_BUILT_MIN"),
         "year_built_max": _parse_int(env.get("YEAR_BUILT_MAX"), "YEAR_BUILT_MAX"),
         "hoa_max": _parse_int(env.get("HOA_MAX"), "HOA_MAX"),
+        "min_assigned_primary_school_rating": 8
+        if env.get("MIN_ASSIGNED_PRIMARY_SCHOOL_RATING") is None
+        else _parse_int(env.get("MIN_ASSIGNED_PRIMARY_SCHOOL_RATING"), "MIN_ASSIGNED_PRIMARY_SCHOOL_RATING"),
+        "min_assigned_middle_school_rating": 8 if min_middle_school_rating is None else min_middle_school_rating,
+        "min_assigned_high_school_rating": 8
+        if env.get("MIN_ASSIGNED_HIGH_SCHOOL_RATING") is None
+        else _parse_int(env.get("MIN_ASSIGNED_HIGH_SCHOOL_RATING"), "MIN_ASSIGNED_HIGH_SCHOOL_RATING"),
         "past_days": 7 if past_days is None else past_days,
         "limit_per_location": 100 if limit_per_location is None else limit_per_location,
         "top_n": 5 if top_n is None else top_n,
@@ -283,8 +309,10 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "negative_keywords": _parse_csv(env.get("NEGATIVE_KEYWORDS")),
         "positive_keywords": _parse_csv(env.get("POSITIVE_KEYWORDS")),
         "enable_openai_scoring": _parse_bool(env.get("ENABLE_OPENAI_SCORING"), default=False),
+        "enable_openai_web_search": _parse_bool(env.get("ENABLE_OPENAI_WEB_SEARCH"), default=True),
         "openai_api_key": env.get("OPENAI_API_KEY"),
         "openai_model": env.get("OPENAI_MODEL") or "gpt-4.1-mini",
+        "report_tracker_path": env.get("REPORT_TRACKER_PATH") or "reports/live_report_tracker.csv",
         "schedule_time": env.get("SCHEDULE_TIME") or "17:00",
         "update_frequency": env.get("UPDATE_FREQUENCY") or "daily",
         "dry_run": _parse_bool(env.get("DRY_RUN"), default=False),

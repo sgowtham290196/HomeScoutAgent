@@ -212,6 +212,13 @@ class Property(BaseModel):
     county: Optional[str] = Field(None, description="County associated with home")
     fips_code: Optional[str] = Field(None, description="The FIPS (Federal Information Processing Standard) code for the county")
     nearby_schools: list[str] | None = None
+    assigned_schools: str | None = None
+    assigned_primary_school: str | None = None
+    assigned_primary_school_rating: int | None = None
+    assigned_middle_school: str | None = None
+    assigned_middle_school_rating: int | None = None
+    assigned_high_school: str | None = None
+    assigned_high_school_rating: int | None = None
     assessed_value: int | None = None
     estimated_value: int | None = None
     tax: int | None = None

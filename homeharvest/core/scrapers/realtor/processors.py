@@ -138,6 +138,13 @@ def process_property(result: dict, mls_only: bool = False, extra_property_data: 
         fips_code=(result["location"]["county"].get("fips_code") if result["location"]["county"] else None),
         days_on_mls=calculate_days_on_mls(result),
         nearby_schools=prop_details.get("schools"),
+        assigned_schools=prop_details.get("assigned_schools"),
+        assigned_primary_school=prop_details.get("assigned_primary_school"),
+        assigned_primary_school_rating=prop_details.get("assigned_primary_school_rating"),
+        assigned_middle_school=prop_details.get("assigned_middle_school"),
+        assigned_middle_school_rating=prop_details.get("assigned_middle_school_rating"),
+        assigned_high_school=prop_details.get("assigned_high_school"),
+        assigned_high_school_rating=prop_details.get("assigned_high_school_rating"),
         assessed_value=prop_details.get("assessed_value"),
         estimated_value=estimated_value if estimated_value else None,
         advertisers=advertisers,
@@ -186,15 +193,97 @@ def process_property(result: dict, mls_only: bool = False, extra_property_data: 
     return realty_property
 
 
+def _school_rating(value: object) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _school_levels(school: dict) -> set[str]:
+    raw_levels = school.get("education_levels") or []
+    if isinstance(raw_levels, str):
+        raw_levels = [raw_levels]
+    levels = {str(level).strip().lower() for level in raw_levels if str(level).strip()}
+
+    grades = school.get("grades") or []
+    if isinstance(grades, str):
+        grades = [grades]
+    grade_values = {str(grade).strip().upper() for grade in grades if str(grade).strip()}
+    if grade_values & {"PK", "K", "1", "2", "3", "4", "5"}:
+        levels.add("elementary")
+    if grade_values & {"6", "7", "8"}:
+        levels.add("middle")
+    if grade_values & {"9", "10", "11", "12"}:
+        levels.add("high")
+    return levels
+
+
+def _school_display_name(school: dict) -> str | None:
+    name = school.get("name")
+    rating = _school_rating(school.get("rating"))
+    if not name:
+        return None
+    return f"{name} ({rating}/10)" if rating is not None else str(name)
+
+
+def _summarize_assigned_schools(schools: list[dict] | None) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "assigned_primary_school": None,
+        "assigned_primary_school_rating": None,
+        "assigned_middle_school": None,
+        "assigned_middle_school_rating": None,
+        "assigned_high_school": None,
+        "assigned_high_school_rating": None,
+        "assigned_schools": None,
+    }
+    if not schools:
+        return summary
+
+    assigned_schools = [school for school in schools if isinstance(school, dict) and school.get("assigned") is not False]
+    if not assigned_schools:
+        assigned_schools = [school for school in schools if isinstance(school, dict)]
+
+    level_targets = {
+        "primary": "elementary",
+        "middle": "middle",
+        "high": "high",
+    }
+    for target_name, level_name in level_targets.items():
+        candidates = [school for school in assigned_schools if level_name in _school_levels(school)]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda school: (_school_rating(school.get("rating")) is None, -(_school_rating(school.get("rating")) or 0)))
+        school = candidates[0]
+        summary[f"assigned_{target_name}_school"] = school.get("name")
+        summary[f"assigned_{target_name}_school_rating"] = _school_rating(school.get("rating"))
+
+    display_names = []
+    seen_names = set()
+    for school in assigned_schools:
+        display_name = _school_display_name(school)
+        if display_name and display_name not in seen_names:
+            seen_names.add(display_name)
+            display_names.append(display_name)
+    summary["assigned_schools"] = "; ".join(display_names) if display_names else None
+    return summary
+
+
 def process_extra_property_details(result: dict, get_key_func=None) -> dict:
     """Process extra property details from GraphQL response"""
     if get_key_func:
-        schools = get_key_func(result, ["nearbySchools", "schools"])
+        assigned_schools_payload = get_key_func(result, ["assignedSchools", "schools"])
+        schools = assigned_schools_payload or get_key_func(result, ["nearbySchools", "schools"])
         assessed_value = get_key_func(result, ["taxHistory", 0, "assessment", "total"])
         tax_history = get_key_func(result, ["taxHistory"])
     else:
+        assigned_schools = result.get("assignedSchools")
+        assigned_schools_payload = assigned_schools.get("schools", []) if assigned_schools else []
         nearby_schools = result.get("nearbySchools")
-        schools = nearby_schools.get("schools", []) if nearby_schools else []
+        nearby_schools_payload = nearby_schools.get("schools", []) if nearby_schools else []
+        schools = assigned_schools_payload or nearby_schools_payload
         tax_history_data = result.get("taxHistory", [])
 
         assessed_value = None
@@ -203,8 +292,13 @@ def process_extra_property_details(result: dict, get_key_func=None) -> dict:
 
         tax_history = tax_history_data
 
+    school_summary = _summarize_assigned_schools(schools)
     if schools:
-        schools = [school["district"]["name"] for school in schools if school["district"].get("name")]
+        schools = [
+            school["district"]["name"]
+            for school in schools
+            if isinstance(school, dict) and school.get("district") and school["district"].get("name")
+        ]
 
     # Process tax history
     latest_tax = None
@@ -232,6 +326,13 @@ def process_extra_property_details(result: dict, get_key_func=None) -> dict:
 
     return {
         "schools": schools if schools else None,
+        "assigned_schools": school_summary.get("assigned_schools"),
+        "assigned_primary_school": school_summary.get("assigned_primary_school"),
+        "assigned_primary_school_rating": school_summary.get("assigned_primary_school_rating"),
+        "assigned_middle_school": school_summary.get("assigned_middle_school"),
+        "assigned_middle_school_rating": school_summary.get("assigned_middle_school_rating"),
+        "assigned_high_school": school_summary.get("assigned_high_school"),
+        "assigned_high_school_rating": school_summary.get("assigned_high_school_rating"),
         "assessed_value": assessed_value if assessed_value else None,
         "tax": latest_tax,
         "tax_history": processed_tax_history,

@@ -12,7 +12,8 @@ It searches Realtor.com listings through `homeharvest.scrape_property()`, applie
 - scores listings from `0` to `100`
 - explains each score with `score_reason`
 - highlights issues with `red_flags`
-- optionally uses one compact LLM pass for finalist subjective-fit notes and a short email intro
+- optionally uses one compact LLM pass for finalist subjective-fit notes, field-level scores/comments, and a short email intro
+- appends the daily top picks to a live CSV tracker while skipping homes already seen on prior runs
 - sends a plain text and HTML email, or prints the result in dry-run mode
 
 ## Project Structure
@@ -23,6 +24,7 @@ agent/
   fetcher.py       Fetch listings with HomeHarvest and deduplicate them
   scoring.py       Deterministic scoring and ranking
   llm_scorer.py    Optional OpenAI finalist summaries
+  tracker.py       Live report tracker persistence and repeat skipping
   emailer.py       HTML/plain text email rendering and SMTP sending
   main.py          Main entrypoint
 
@@ -78,6 +80,9 @@ The real `.env` file is ignored by Git. The example file stays committed.
 - `LOT_SQFT_MIN`, `LOT_SQFT_MAX`
 - `YEAR_BUILT_MIN`, `YEAR_BUILT_MAX`
 - `HOA_MAX`
+- `MIN_ASSIGNED_PRIMARY_SCHOOL_RATING`
+- `MIN_ASSIGNED_MIDDLE_SCHOOL_RATING`
+- `MIN_ASSIGNED_HIGH_SCHOOL_RATING`
 - `PAST_DAYS`
 - `LIMIT_PER_LOCATION`
 - `TOP_N`
@@ -85,8 +90,10 @@ The real `.env` file is ignored by Git. The example file stays committed.
 - `POSITIVE_KEYWORDS`
 - `NEGATIVE_KEYWORDS`
 - `ENABLE_OPENAI_SCORING`
+- `ENABLE_OPENAI_WEB_SEARCH`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `REPORT_TRACKER_PATH`
 - `SCHEDULE_TIME`
 - `UPDATE_FREQUENCY`
 - `DRY_RUN`
@@ -106,6 +113,9 @@ BATHS_MIN=2
 SQFT_MIN=900
 YEAR_BUILT_MIN=1970
 HOA_MAX=600
+MIN_ASSIGNED_PRIMARY_SCHOOL_RATING=8
+MIN_ASSIGNED_MIDDLE_SCHOOL_RATING=8
+MIN_ASSIGNED_HIGH_SCHOOL_RATING=8
 
 PAST_DAYS=7
 LIMIT_PER_LOCATION=100
@@ -116,8 +126,10 @@ POSITIVE_KEYWORDS=remodeled,updated,excellent schools,quiet,new roof,solar,corne
 NEGATIVE_KEYWORDS=fixer,TLC,as-is,auction,needs work,fire damage,foundation
 
 ENABLE_OPENAI_SCORING=false
+ENABLE_OPENAI_WEB_SEARCH=true
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4.1-mini
+REPORT_TRACKER_PATH=reports/live_report_tracker.csv
 SCHEDULE_TIME=17:00
 UPDATE_FREQUENCY=daily
 
@@ -216,6 +228,7 @@ Each property is scored deterministically using:
 - beds and baths fit
 - year built
 - HOA
+- assigned elementary/primary, middle, and high school GreatSchools ratings
 - days on market
 - positive keyword matches
 - negative keyword penalties
@@ -226,6 +239,20 @@ Each ranked property includes:
 - `score`
 - `score_reason`
 - `red_flags`
+- `score_breakdown`
+- `detailed_analysis`
+
+## Live Report Tracker
+
+Each run appends the ranked top picks to `REPORT_TRACKER_PATH`, which defaults to:
+
+```text
+reports/live_report_tracker.csv
+```
+
+The tracker is intentionally readable rather than a raw data export. Its first columns are `House` and `Address`, followed by overall and LLM score/comment pairs such as `Safety Score`, `Safety Comment`, `Appreciation Score`, and `Appreciation Comment`. The final column is `Zillow Link`. If the same home appears again on the next day or any later run, it is skipped instead of duplicated. Older raw tracker files are rewritten into this simplified shape on the next run.
+
+Assigned-school filters use the GreatSchools rating fields returned in Realtor school data. `MIN_ASSIGNED_PRIMARY_SCHOOL_RATING`, `MIN_ASSIGNED_MIDDLE_SCHOOL_RATING`, and `MIN_ASSIGNED_HIGH_SCHOOL_RATING` default to `8`, so a listing must have all three assigned-school ratings at `8/10` or better to remain in the daily candidate set.
 
 ## Email Output
 
@@ -252,11 +279,14 @@ If you set:
 ```env
 ENABLE_OPENAI_SCORING=true
 OPENAI_API_KEY=your_openai_api_key
+ENABLE_OPENAI_WEB_SEARCH=true
 ```
 
 the agent will make one low-cost LLM call for the already-ranked finalists. That call is only used to:
 
 - look at subjective criteria fit for the finalists
+- add field-level `0` to `10` scores and comments for safety, neighborhood, appreciation, schools, commute, value, condition, and risk
+- use web-search grounding for safety/neighborhood and appreciation context when enabled
 - draft a short intro paragraph for the email
 
 The OpenAI step is optional and does not control ranking order. Deterministic scoring remains the primary ranking method.

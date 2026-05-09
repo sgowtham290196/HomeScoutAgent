@@ -56,6 +56,22 @@ def _format_number(value: float | None) -> str:
     return f"{value:,.0f}"
 
 
+def _component_line(name: str, score: float, max_score: float, detail: str | None) -> str:
+    detail_suffix = f" - {detail}" if detail else ""
+    return f"{name}: {score:.1f}/{max_score:.1f}{detail_suffix}"
+
+
+def _has_value(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except TypeError:
+        pass
+    return not (isinstance(value, str) and value == "")
+
+
 def _listing_corpus(row: pd.Series) -> str:
     fields = [
         row.get("text"),
@@ -233,7 +249,7 @@ def _score_keywords(row: pd.Series, config: AgentConfig) -> tuple[float, list[st
 def score_properties(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
     if df.empty:
         scored = df.copy()
-        for column in ["score", "score_reason", "red_flags"]:
+        for column in ["score", "score_reason", "red_flags", "detailed_analysis", "score_breakdown"]:
             scored[column] = pd.Series(dtype="object")
         return scored
 
@@ -314,11 +330,94 @@ def score_properties(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
         if not red_flags:
             red_flags.append("no major red flags found")
 
+        strengths: list[str] = []
+        if price_score >= 14:
+            strengths.append("priced competitively within your target range")
+        if ppsf_score >= 9:
+            strengths.append("strong price-per-square-foot value for this result set")
+        if size_score >= 8:
+            strengths.append("above-average usable square footage")
+        if beds_score >= 8:
+            strengths.append("beds and baths align well with your target")
+        if age_score >= 8:
+            strengths.append("newer build or relatively modern home age")
+        if hoa_score >= 8:
+            strengths.append("low or no HOA burden")
+        if freshness_score >= 8:
+            strengths.append("fresh listing with limited time on market")
+        if good_matches:
+            strengths.append(f"listing language matches your preferences: {', '.join(good_matches)}")
+
+        tradeoffs: list[str] = []
+        if price_score <= 10:
+            tradeoffs.append("priced toward the upper end of your configured budget")
+        if ppsf_score <= 6:
+            tradeoffs.append("price per square foot trails the stronger-value listings")
+        if size_score <= 5:
+            tradeoffs.append("smaller footprint compared with the best-sized options")
+        if beds_score <= 5:
+            tradeoffs.append("beds or baths are only marginal relative to your target")
+        if age_score <= 5:
+            tradeoffs.append("older home age may imply more maintenance risk")
+        if hoa_score <= 5:
+            tradeoffs.append("HOA cost is not especially favorable")
+        if freshness_score <= 4:
+            tradeoffs.append("listing has been sitting longer than the fresher options")
+        if bad_matches:
+            tradeoffs.append(f"listing text includes caution keywords: {', '.join(bad_matches)}")
+
+        extra_context: list[str] = []
+        lot_sqft = _safe_float(row.get("lot_sqft"))
+        if sqft is not None or lot_sqft is not None:
+            extra_context.append(
+                f"size context: home {_format_number(sqft)} sqft, lot {_format_number(lot_sqft)} sqft"
+            )
+        if _has_value(row.get("style")):
+            extra_context.append(f"style: {row.get('style')}")
+        assigned_school_notes: list[str] = []
+        for label, name_column, rating_column in [
+            ("primary", "assigned_primary_school", "assigned_primary_school_rating"),
+            ("middle", "assigned_middle_school", "assigned_middle_school_rating"),
+            ("high", "assigned_high_school", "assigned_high_school_rating"),
+        ]:
+            school_name = row.get(name_column)
+            school_rating = _safe_int(row.get(rating_column))
+            if _has_value(school_name) or school_rating is not None:
+                rating_note = f" ({school_rating}/10)" if school_rating is not None else ""
+                assigned_school_notes.append(f"{label}: {school_name or 'assigned school'}{rating_note}")
+        if assigned_school_notes:
+            extra_context.append(f"assigned schools: {'; '.join(assigned_school_notes)}")
+        elif _has_value(row.get("nearby_schools")):
+            extra_context.append(f"schools: {row.get('nearby_schools')}")
+        if _has_value(row.get("search_location")):
+            extra_context.append(f"matched search area: {row.get('search_location')}")
+
+        score_breakdown_lines = [
+            _component_line("Price", price_score, 20.0, price_reason),
+            _component_line("Price per sqft", ppsf_score, 15.0, ppsf_reason),
+            _component_line("Size", size_score, 10.0, size_reason),
+            _component_line("Beds/baths fit", beds_score, 10.0, beds_reason),
+            _component_line("Age", age_score, 10.0, age_reason),
+            _component_line("HOA", hoa_score, 10.0, hoa_reason),
+            _component_line("Freshness", freshness_score, 10.0, freshness_reason),
+            _component_line("Keywords/subjective fit", keyword_score, 15.0, keyword_reason),
+        ]
+
+        detailed_sections = [
+            f"Strengths: {'; '.join(strengths) if strengths else 'No standout strengths beyond baseline fit.'}",
+            f"Tradeoffs: {'; '.join(tradeoffs) if tradeoffs else 'No major tradeoffs surfaced from the structured data.'}",
+            f"Score breakdown: {' | '.join(score_breakdown_lines)}",
+        ]
+        if extra_context:
+            detailed_sections.append(f"Context: {'; '.join(extra_context)}")
+
         records.append(
             {
                 "score": score,
                 "score_reason": "; ".join(score_reasons),
                 "red_flags": "; ".join(red_flags),
+                "score_breakdown": " | ".join(score_breakdown_lines),
+                "detailed_analysis": "\n".join(detailed_sections),
                 "_sort_price": list_price if list_price is not None else float("inf"),
             }
         )
