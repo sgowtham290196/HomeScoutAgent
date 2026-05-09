@@ -246,10 +246,12 @@ def test_fetch_properties_uses_scrape_property_mock(monkeypatch) -> None:
             ]
         )
 
-    monkeypatch.setattr("agent.fetcher.scrape_property", fake_scrape_property)
+    scrape_mock = MagicMock(side_effect=fake_scrape_property)
+    monkeypatch.setattr("agent.fetcher.scrape_property", scrape_mock)
 
     raw_df, deduped_df, filtered_df = fetch_properties(config)
 
+    assert all(call.kwargs.get("exclude_pending") is True for call in scrape_mock.mock_calls)
     assert len(raw_df) == 6
     assert len(deduped_df) == 4
     assert len(filtered_df) == 4
@@ -302,6 +304,21 @@ def test_process_extra_property_details_extracts_assigned_greatschools_ratings()
     assert details["assigned_middle_school_rating"] == 8
     assert details["assigned_high_school"] == "West High"
     assert "North Elementary (9/10)" in details["assigned_schools"]
+
+
+def test_client_side_filters_remove_in_contract_statuses() -> None:
+    config = load_config(sample_env())
+    df = sample_dataframe()
+    df.loc[0, "status"] = "PENDING"
+    df.loc[1, "mls_status"] = "Active Under Contract"
+    df.loc[2, "status"] = "for_sale"
+    df.loc[2, "mls_status"] = "Active"
+
+    from agent.fetcher import apply_client_side_filters
+
+    filtered = apply_client_side_filters(df, config)
+
+    assert filtered["property_id"].tolist() == ["3"]
 
 
 def test_school_rating_filter_requires_all_assigned_school_levels() -> None:

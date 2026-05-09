@@ -33,6 +33,7 @@ def fetch_properties_by_location(config: AgentConfig) -> pd.DataFrame:
             year_built_min=config.year_built_min,
             year_built_max=config.year_built_max,
             past_days=config.past_days,
+            exclude_pending=True,
             limit=config.limit_per_location,
         )
         if frame is None or frame.empty:
@@ -65,6 +66,40 @@ def deduplicate_properties(df: pd.DataFrame) -> pd.DataFrame:
     return deduped.reset_index(drop=True)
 
 
+IN_CONTRACT_STATUS_TERMS = (
+    "pending",
+    "contingent",
+    "under contract",
+    "under_contract",
+    "active under contract",
+    "backup offer",
+    "accepting backup",
+    "contract",
+)
+
+
+def _status_is_in_contract(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except TypeError:
+        pass
+    normalized = str(value).strip().lower().replace("-", " ").replace("_", " ")
+    if not normalized:
+        return False
+    return any(term.replace("_", " ") in normalized for term in IN_CONTRACT_STATUS_TERMS)
+
+
+def _available_status_mask(df: pd.DataFrame) -> pd.Series:
+    mask = pd.Series(True, index=df.index)
+    for column in ("status", "mls_status"):
+        if column in df.columns:
+            mask &= ~df[column].map(_status_is_in_contract)
+    return mask
+
+
 def _rating_meets_min(series: pd.Series, minimum: int | None) -> pd.Series:
     if minimum is None:
         return pd.Series(True, index=series.index)
@@ -77,6 +112,8 @@ def apply_client_side_filters(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
         return df.copy()
 
     filtered = df.copy()
+
+    filtered = filtered[_available_status_mask(filtered)]
 
     if config.hoa_max is not None and "hoa_fee" in filtered.columns:
         hoa_values = pd.to_numeric(filtered["hoa_fee"], errors="coerce")
