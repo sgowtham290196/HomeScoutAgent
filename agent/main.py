@@ -42,9 +42,14 @@ def run_agent_once(config: AgentConfig | None = None) -> None:
     logger.info("Fetched %s raw properties", len(raw_df))
     logger.info("Deduplicated to %s properties", len(deduped_df))
     logger.info("Filtered down to %s properties", len(filtered_df))
+    fetch_failures = filtered_df.attrs.get("fetch_failures", [])
+    if fetch_failures:
+        logger.warning("Fetch failures: %s", "; ".join(fetch_failures))
 
     ranked_df = rank_properties(filtered_df, config)
+    ranked_df.attrs["fetch_failures"] = fetch_failures
     enriched_df = enrich_finalists_with_llm(ranked_df, config)
+    enriched_df.attrs["fetch_failures"] = fetch_failures
     new_tracker_rows = append_new_report_entries(enriched_df, config)
 
     logger.info("Prepared top %s properties for email", len(enriched_df))

@@ -257,6 +257,37 @@ def test_fetch_properties_uses_scrape_property_mock(monkeypatch) -> None:
     assert len(filtered_df) == 4
 
 
+def test_fetch_properties_continues_after_location_failure(monkeypatch) -> None:
+    config = load_config(sample_env())
+
+    def fake_scrape_property(**kwargs):
+        location = kwargs["location"]
+        if location == "Sunnyvale, CA":
+            raise RuntimeError("temporary upstream failure")
+        return pd.DataFrame(
+            [
+                {
+                    "property_id": f"unique-{location}",
+                    "property_url": f"https://example.com/{location.replace(' ', '-').replace(',', '').lower()}",
+                    "formatted_address": f"Unique Home, {location}",
+                    "hoa_fee": 300,
+                    "assigned_primary_school_rating": 8,
+                    "assigned_middle_school_rating": 8,
+                    "assigned_high_school_rating": 8,
+                }
+            ]
+        )
+
+    monkeypatch.setattr("agent.fetcher.scrape_property", MagicMock(side_effect=fake_scrape_property))
+
+    raw_df, deduped_df, filtered_df = fetch_properties(config)
+
+    assert len(raw_df) == 2
+    assert len(deduped_df) == 2
+    assert len(filtered_df) == 2
+    assert filtered_df.attrs["fetch_failures"] == ["Sunnyvale, CA: temporary upstream failure"]
+
+
 def test_scraper_honors_extra_property_data_flag() -> None:
     scraper = Scraper(ScraperInput(location="Santa Clara, CA", listing_type=ListingType.FOR_SALE))
     disabled_scraper = Scraper(
@@ -529,6 +560,7 @@ def test_invalid_zero_values_are_not_silently_defaulted() -> None:
 def test_email_rendering_does_not_crash() -> None:
     config = load_config(sample_env())
     ranked = rank_properties(sample_dataframe(), config)
+    ranked.attrs["fetch_failures"] = ["Sunnyvale, CA: temporary upstream failure"]
     ranked.loc[0, "llm_safety_score"] = 8
     ranked.loc[0, "llm_safety_comment"] = "Public sources indicate relatively favorable local safety."
     ranked.loc[0, "llm_appreciation_score"] = 7
@@ -540,6 +572,8 @@ def test_email_rendering_does_not_crash() -> None:
     message = build_email_message(ranked, config)
 
     assert "Daily Real Estate Picks" in html_body
+    assert "Fetch warnings:" in text_body
+    assert "temporary upstream failure" in html_body
     assert "Why it ranked" in text_body
     assert "Assigned GreatSchools ratings" in text_body
     assert "Assigned schools" in text_body

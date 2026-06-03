@@ -29,6 +29,8 @@ DEFAULT_HEADERS = {
     'x-is-bot': 'false',
 }
 
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
+
 
 class ScraperInput(BaseModel):
     location: str
@@ -162,7 +164,9 @@ class Scraper:
                     "client_app_id": "rdc_mobile_native,24.21.23.679885,iphone",
                 }
             ),
+            timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
+        response.raise_for_status()
 
         data = response.json()
 

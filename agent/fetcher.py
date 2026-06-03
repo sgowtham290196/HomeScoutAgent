@@ -13,29 +13,36 @@ logger = logging.getLogger(__name__)
 
 def fetch_properties_by_location(config: AgentConfig) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
+    fetch_failures: list[str] = []
 
     for location in config.real_estate_locations:
         logger.info("Fetching listings for %s", location)
-        frame = scrape_property(
-            location=location,
-            listing_type=config.listing_type,
-            property_type=config.property_types or None,
-            price_min=config.price_min,
-            price_max=config.price_max,
-            beds_min=config.beds_min,
-            beds_max=config.beds_max,
-            baths_min=config.baths_min,
-            baths_max=config.baths_max,
-            sqft_min=config.sqft_min,
-            sqft_max=config.sqft_max,
-            lot_sqft_min=config.lot_sqft_min,
-            lot_sqft_max=config.lot_sqft_max,
-            year_built_min=config.year_built_min,
-            year_built_max=config.year_built_max,
-            past_days=config.past_days,
-            exclude_pending=True,
-            limit=config.limit_per_location,
-        )
+        try:
+            frame = scrape_property(
+                location=location,
+                listing_type=config.listing_type,
+                property_type=config.property_types or None,
+                price_min=config.price_min,
+                price_max=config.price_max,
+                beds_min=config.beds_min,
+                beds_max=config.beds_max,
+                baths_min=config.baths_min,
+                baths_max=config.baths_max,
+                sqft_min=config.sqft_min,
+                sqft_max=config.sqft_max,
+                lot_sqft_min=config.lot_sqft_min,
+                lot_sqft_max=config.lot_sqft_max,
+                year_built_min=config.year_built_min,
+                year_built_max=config.year_built_max,
+                past_days=config.past_days,
+                exclude_pending=True,
+                limit=config.limit_per_location,
+            )
+        except Exception as exc:
+            fetch_failures.append(f"{location}: {exc}")
+            logger.exception("Failed to fetch listings for %s", location)
+            continue
+
         if frame is None or frame.empty:
             logger.info("No listings returned for %s", location)
             continue
@@ -45,14 +52,20 @@ def fetch_properties_by_location(config: AgentConfig) -> pd.DataFrame:
         frames.append(location_frame)
 
     if not frames:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        empty.attrs["fetch_failures"] = fetch_failures
+        return empty
 
-    return pd.concat(frames, ignore_index=True)
+    combined = pd.concat(frames, ignore_index=True)
+    combined.attrs["fetch_failures"] = fetch_failures
+    return combined
 
 
 def deduplicate_properties(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        return df.copy()
+        deduped_empty = df.copy()
+        deduped_empty.attrs.update(df.attrs)
+        return deduped_empty
 
     deduped = df.copy()
     deduped["dedupe_key"] = deduped.get("property_id")
@@ -63,7 +76,9 @@ def deduplicate_properties(df: pd.DataFrame) -> pd.DataFrame:
     fallback_keys = pd.Series(deduped.index.astype(str), index=deduped.index)
     deduped["dedupe_key"] = deduped["dedupe_key"].fillna(fallback_keys)
     deduped = deduped.drop_duplicates(subset=["dedupe_key"], keep="first").drop(columns=["dedupe_key"])
-    return deduped.reset_index(drop=True)
+    result = deduped.reset_index(drop=True)
+    result.attrs.update(df.attrs)
+    return result
 
 
 IN_CONTRACT_STATUS_TERMS = (
@@ -109,7 +124,9 @@ def _rating_meets_min(series: pd.Series, minimum: int | None) -> pd.Series:
 
 def apply_client_side_filters(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
     if df.empty:
-        return df.copy()
+        filtered_empty = df.copy()
+        filtered_empty.attrs.update(df.attrs)
+        return filtered_empty
 
     filtered = df.copy()
 
@@ -132,7 +149,9 @@ def apply_client_side_filters(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
             break
         filtered = filtered[_rating_meets_min(filtered[column], minimum)]
 
-    return filtered.reset_index(drop=True)
+    result = filtered.reset_index(drop=True)
+    result.attrs.update(df.attrs)
+    return result
 
 
 def fetch_properties(config: AgentConfig) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

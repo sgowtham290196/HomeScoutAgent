@@ -21,7 +21,7 @@ from tenacity import (
     stop_after_attempt,
 )
 
-from .. import Scraper, DEFAULT_HEADERS
+from .. import Scraper, DEFAULT_HEADERS, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from ....exceptions import AuthenticationError
 from ..models import (
     Property,
@@ -72,7 +72,8 @@ class RealtorScraper(Scraper):
             self.SEARCH_GQL_URL,
             headers=DEFAULT_HEADERS,
             data=json.dumps(payload, separators=(',', ':')),
-            proxies=self.proxies
+            proxies=self.proxies,
+            timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
 
         if response.status_code == 403:
@@ -84,6 +85,7 @@ class RealtorScraper(Scraper):
             else:
                 raise Exception("Received 403 Forbidden, retrying...")
 
+        response.raise_for_status()
         return response.json()
 
     @retry(

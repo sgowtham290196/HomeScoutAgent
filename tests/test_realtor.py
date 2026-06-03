@@ -3,6 +3,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from homeharvest import scrape_property, Property
 import pandas as pd
+import pytest
+
+pytestmark = pytest.mark.integration
 
 
 def test_realtor_pending_or_contingent():

@@ -184,8 +184,16 @@ def _search_criteria_lines(config: AgentConfig) -> list[str]:
     return lines
 
 
+def _fetch_failure_lines(df: pd.DataFrame) -> list[str]:
+    failures = df.attrs.get("fetch_failures", [])
+    if not failures:
+        return []
+    return [str(failure) for failure in failures if str(failure).strip()]
+
+
 def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
     email_intro = df.attrs.get("llm_email_intro")
+    fetch_failures = _fetch_failure_lines(df)
 
     lines = [
         "Daily Real Estate Picks",
@@ -194,6 +202,15 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
         *[f"- {line}" for line in _search_criteria_lines(config)],
         "",
     ]
+
+    if fetch_failures:
+        lines.extend(
+            [
+                "Fetch warnings:",
+                *[f"- {failure}" for failure in fetch_failures],
+                "",
+            ]
+        )
 
     if email_intro:
         lines.extend([email_intro, ""])
@@ -251,10 +268,20 @@ def render_text_email(df: pd.DataFrame, config: AgentConfig) -> str:
 
 def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
     email_intro = df.attrs.get("llm_email_intro")
+    fetch_failures = _fetch_failure_lines(df)
     criteria_items = "".join(
         f"<li>{html.escape(line)}</li>"
         for line in _search_criteria_lines(config)
     )
+    fetch_warning_html = ""
+    if fetch_failures:
+        warning_items = "".join(f"<li>{html.escape(failure)}</li>" for failure in fetch_failures)
+        fetch_warning_html = (
+            '<div style="border:1px solid #f59e0b;background:#fffbeb;padding:12px;margin:12px 0;">'
+            "<strong>Fetch warnings:</strong>"
+            f"<ul>{warning_items}</ul>"
+            "</div>"
+        )
 
     cards: list[str] = []
     if df.empty:
@@ -340,6 +367,7 @@ def render_html_email(df: pd.DataFrame, config: AgentConfig) -> str:
         "<p style=\"margin-top:0;color:#4b5563;\">Top ranked homes from today's HomeHarvest run.</p>"
         "<h2 style=\"font-size:18px;\">Search criteria</h2>"
         f"<ul>{criteria_items}</ul>"
+        f"{fetch_warning_html}"
         + (
             f"<p style=\"margin:12px 0 16px 0;\">{html.escape(str(email_intro))}</p>"
             if email_intro

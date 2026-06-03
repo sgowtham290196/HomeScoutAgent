@@ -34,7 +34,7 @@ tests/             Tests for scraper behavior and the new agent layer
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - SMTP account for sending email
 - optional OpenAI API key if you want finalist summaries
 

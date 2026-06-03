@@ -11,7 +11,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9"
+python = ">=3.10"
 requests = "^2.32.4"
 pandas = "^2.3.1"
 pydantic = "^2.11.7"
@@ -23,6 +23,29 @@ openai = "^1.108.1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
 pre-commit = "^3.7.0"
+
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: live third-party integration tests that are skipped by default",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = false
+check_untyped_defs = false
+follow_imports = "skip"
+disable_error_code = ["arg-type", "attr-defined", "operator", "union-attr"]
 
 [build-system]
 requires = ["poetry-core"]
