@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import logging
-import re
 
 import pandas as pd
+from pydantic import BaseModel, Field
 
 from agent.config import AgentConfig
+from agent.langchain_models import create_chat_model
 
 logger = logging.getLogger(__name__)
 
@@ -22,32 +22,36 @@ LLM_ASSESSMENT_FIELDS = (
 )
 
 
+class FieldAssessment(BaseModel):
+    score: float | None = Field(default=None, description="Numeric score from 0 to 10.")
+    comment: str = Field(default="", description="Brief supporting comment.")
+
+
+class ListingAssessment(BaseModel):
+    summary: str = ""
+    criteria_match: str = ""
+    possible_concern: str = ""
+    research_sources: list[str] = Field(default_factory=list)
+    safety: FieldAssessment = Field(default_factory=FieldAssessment)
+    neighborhood: FieldAssessment = Field(default_factory=FieldAssessment)
+    appreciation: FieldAssessment = Field(default_factory=FieldAssessment)
+    schools: FieldAssessment = Field(default_factory=FieldAssessment)
+    commute: FieldAssessment = Field(default_factory=FieldAssessment)
+    value: FieldAssessment = Field(default_factory=FieldAssessment)
+    condition: FieldAssessment = Field(default_factory=FieldAssessment)
+    risk: FieldAssessment = Field(default_factory=FieldAssessment)
+
+
+class FinalistAssessmentBatch(BaseModel):
+    email_intro: str = ""
+    listings: list[ListingAssessment] = Field(default_factory=list)
+
+
 def llm_assessment_columns() -> list[str]:
     columns = ["llm_summary", "llm_criteria_match", "llm_possible_concern", "llm_research_sources"]
     for field in LLM_ASSESSMENT_FIELDS:
         columns.extend([f"llm_{field}_score", f"llm_{field}_comment"])
     return columns
-
-
-def _extract_json(text: str) -> dict[str, str]:
-    cleaned = text.strip()
-    fenced_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if fenced_match:
-        cleaned = fenced_match.group(0)
-    payload = json.loads(cleaned)
-    return {
-        "summary": str(payload.get("summary", "")).strip(),
-        "criteria_match": str(payload.get("criteria_match", "")).strip(),
-        "possible_concern": str(payload.get("possible_concern", "")).strip(),
-    }
-
-
-def _extract_batch_json(text: str) -> dict:
-    cleaned = text.strip()
-    fenced_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if fenced_match:
-        cleaned = fenced_match.group(0)
-    return json.loads(cleaned)
 
 
 def _coerce_score(value: object) -> float | None:
@@ -75,24 +79,15 @@ def _ensure_llm_columns(enriched: pd.DataFrame) -> pd.DataFrame:
 
 
 def _responses_create(client: object, config: AgentConfig, prompt: str, *, with_web_search: bool) -> object:
-    kwargs: dict[str, object] = {
-        "model": config.openai_model,
-        "input": prompt,
-    }
-    if with_web_search:
-        kwargs["tools"] = [
-            {
-                "type": "web_search",
-                "user_location": {
-                    "type": "approximate",
-                    "country": "US",
-                    "region": "California",
-                    "timezone": "America/Los_Angeles",
-                },
-            }
-        ]
-        kwargs["tool_choice"] = "auto"
-    return client.responses.create(**kwargs)
+    del config, with_web_search
+    return client.with_structured_output(FinalistAssessmentBatch).invoke(prompt)
+
+
+def _listing_field_assessment(listing: ListingAssessment, field: str) -> FieldAssessment:
+    assessment = getattr(listing, field, None)
+    if isinstance(assessment, FieldAssessment):
+        return assessment
+    return FieldAssessment()
 
 
 def enrich_finalists_with_llm(df: pd.DataFrame, config: AgentConfig) -> pd.DataFrame:
@@ -104,20 +99,18 @@ def enrich_finalists_with_llm(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
         return enriched
 
     if not config.enable_openai_scoring:
-        logger.info("OpenAI scoring disabled; skipping qualitative summaries.")
+        logger.info("LangChain scoring disabled; skipping qualitative summaries.")
         return enriched
 
-    if not config.openai_api_key:
-        logger.warning("ENABLE_OPENAI_SCORING is true but OPENAI_API_KEY is missing; skipping.")
+    if not config.langchain_api_key:
+        logger.warning("ENABLE_OPENAI_SCORING is true but no LangChain provider API key is configured; skipping.")
         return enriched
 
     try:
-        from openai import OpenAI
-    except ImportError:
-        logger.warning("OpenAI SDK is not installed; skipping qualitative summaries.")
+        client = create_chat_model(config)
+    except Exception as exc:
+        logger.warning("LangChain chat model initialization failed: %s", exc)
         return enriched
-
-    client = OpenAI(api_key=config.openai_api_key)
 
     finalist_lines: list[str] = []
     for offset, (_, row) in enumerate(enriched.iterrows(), start=1):
@@ -154,16 +147,13 @@ def enrich_finalists_with_llm(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
         "You are helping with a low-cost real estate email workflow.\n"
         "The deterministic score has already ranked these finalists. "
         "Use subjective criteria and public web context to add concise qualitative notes and a short email intro.\n"
-        "For safety, neighborhood quality, and appreciation, ground comments in public web research when tools are available. "
+        "For safety, neighborhood quality, and appreciation, use verifiable public context when you have it. "
         "Use sources such as local crime/safety pages, city or police data, school/neighborhood pages, Redfin/Zillow/Realtor market pages, "
         "or comparable public housing-market references. Avoid inventing exact statistics if you cannot verify them.\n"
         "Do not rerank the listings and do not repeat the full email.\n"
-        "Return strict JSON with keys email_intro and listings.\n"
-        "email_intro must be one short paragraph.\n"
-        "listings must be an array with one item per listing in the same order.\n"
-        "Each listing item must have keys summary, criteria_match, possible_concern, research_sources, and field_assessments.\n"
-        "research_sources must be a short array of source names or URLs used for the location-level assessment.\n"
-        "field_assessments must contain exactly these keys: "
+        "Return one structured item per listing in the same order.\n"
+        "Each listing must include summary, criteria match, possible concern, research sources, and field assessments.\n"
+        "Field assessments must contain exactly these keys: "
         f"{', '.join(LLM_ASSESSMENT_FIELDS)}.\n"
         "Each field assessment must have numeric score from 0 to 10 and a brief comment. "
         "For appreciation, judge typical neighborhood/city appreciation over the last few years, not just the listing price. "
@@ -173,50 +163,37 @@ def enrich_finalists_with_llm(df: pd.DataFrame, config: AgentConfig) -> pd.DataF
     )
 
     try:
-        response = _responses_create(
+        parsed = _responses_create(
             client,
             config,
             prompt,
             with_web_search=config.enable_openai_web_search,
         )
-        parsed = _extract_batch_json(response.output_text)
     except Exception as exc:
-        if not config.enable_openai_web_search:
-            logger.warning("OpenAI finalist enrichment failed: %s", exc)
-            return enriched
-        logger.warning("OpenAI finalist enrichment with web search failed: %s", exc)
-        try:
-            response = _responses_create(client, config, prompt, with_web_search=False)
-            parsed = _extract_batch_json(response.output_text)
-        except Exception as fallback_exc:
-            logger.warning("OpenAI finalist enrichment fallback failed: %s", fallback_exc)
-            return enriched
+        logger.warning("LangChain finalist enrichment failed: %s", exc)
+        return enriched
 
-    enriched.attrs["llm_email_intro"] = str(parsed.get("email_intro", "")).strip() or None
-    listings = parsed.get("listings", [])
+    if isinstance(parsed, dict):
+        parsed = FinalistAssessmentBatch.model_validate(parsed)
+    if not isinstance(parsed, FinalistAssessmentBatch):
+        logger.warning("LangChain finalist enrichment returned an unexpected payload; skipping.")
+        return enriched
+
+    enriched.attrs["llm_email_intro"] = parsed.email_intro.strip() or None
+    listings = parsed.listings
     for row_position, (_, row) in enumerate(enriched.iterrows()):
-        if row_position >= len(listings) or not isinstance(listings[row_position], dict):
+        if row_position >= len(listings):
             continue
         listing = listings[row_position]
-        parsed_listing = {
-            "summary": str(listing.get("summary", "")).strip(),
-            "criteria_match": str(listing.get("criteria_match", "")).strip(),
-            "possible_concern": str(listing.get("possible_concern", "")).strip(),
-        }
-        enriched.at[row.name, "llm_summary"] = parsed_listing["summary"] or None
-        enriched.at[row.name, "llm_criteria_match"] = parsed_listing["criteria_match"] or None
-        enriched.at[row.name, "llm_possible_concern"] = parsed_listing["possible_concern"] or None
-        enriched.at[row.name, "llm_research_sources"] = _format_sources(listing.get("research_sources"))
+        enriched.at[row.name, "llm_summary"] = listing.summary.strip() or None
+        enriched.at[row.name, "llm_criteria_match"] = listing.criteria_match.strip() or None
+        enriched.at[row.name, "llm_possible_concern"] = listing.possible_concern.strip() or None
+        enriched.at[row.name, "llm_research_sources"] = _format_sources(listing.research_sources)
 
-        field_assessments = listing.get("field_assessments", {})
-        if not isinstance(field_assessments, dict):
-            continue
         for field in LLM_ASSESSMENT_FIELDS:
-            assessment = field_assessments.get(field, {})
-            if not isinstance(assessment, dict):
-                continue
-            enriched.at[row.name, f"llm_{field}_score"] = _coerce_score(assessment.get("score"))
-            comment = str(assessment.get("comment", "")).strip()
+            assessment = _listing_field_assessment(listing, field)
+            enriched.at[row.name, f"llm_{field}_score"] = _coerce_score(assessment.score)
+            comment = assessment.comment.strip()
             enriched.at[row.name, f"llm_{field}_comment"] = comment or None
 
     return enriched

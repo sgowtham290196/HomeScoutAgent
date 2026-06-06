@@ -1,8 +1,8 @@
 # HomeScoutAgent
 
-HomeScoutAgent is a simple daily real estate email agent built on top of the existing HomeHarvest scraper.
+HomeScoutAgent is a LangChain-powered daily real estate email agent built on top of the existing HomeHarvest scraper.
 
-It searches Realtor.com listings through `homeharvest.scrape_property()`, applies hard filters from `.env`, ranks the best matches with transparent deterministic scoring, and sends a daily email with the top picks.
+It searches Realtor.com listings through `homeharvest.scrape_property()`, applies hard filters from `.env`, ranks the best matches with transparent deterministic scoring, uses LangChain for optional finalist analysis, and sends a daily email with the top picks.
 
 ## What This Project Does
 
@@ -23,7 +23,9 @@ agent/
   config.py        Load and validate environment variables
   fetcher.py       Fetch listings with HomeHarvest and deduplicate them
   scoring.py       Deterministic scoring and ranking
-  llm_scorer.py    Optional OpenAI finalist summaries
+  langchain_agent.py LangChain tool orchestration for the daily workflow
+  langchain_models.py Configurable LangChain chat model factory
+  llm_scorer.py    LangChain-powered finalist summaries
   tracker.py       Live report tracker persistence and repeat skipping
   emailer.py       HTML/plain text email rendering and SMTP sending
   main.py          Main entrypoint
@@ -93,6 +95,10 @@ The real `.env` file is ignored by Git. The example file stays committed.
 - `ENABLE_OPENAI_WEB_SEARCH`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `LANGCHAIN_PROVIDER`
+- `LANGCHAIN_MODEL`
+- `LANGCHAIN_TEMPERATURE`
+- `LANGCHAIN_API_KEY`
 - `REPORT_TRACKER_PATH`
 - `SCHEDULE_TIME`
 - `UPDATE_FREQUENCY`
@@ -129,6 +135,10 @@ ENABLE_OPENAI_SCORING=false
 ENABLE_OPENAI_WEB_SEARCH=true
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4.1-mini
+LANGCHAIN_PROVIDER=openai
+LANGCHAIN_MODEL=gpt-4.1-mini
+LANGCHAIN_TEMPERATURE=0
+LANGCHAIN_API_KEY=
 REPORT_TRACKER_PATH=reports/live_report_tracker.csv
 SCHEDULE_TIME=17:00
 UPDATE_FREQUENCY=daily
@@ -272,24 +282,26 @@ Each daily email includes:
 - primary photo when available
 - supports multiple recipients via comma-separated `EMAIL_TO`
 
-## Optional OpenAI Summaries
+## Optional LangChain Finalist Analysis
 
 If you set:
 
 ```env
 ENABLE_OPENAI_SCORING=true
+LANGCHAIN_PROVIDER=openai
+LANGCHAIN_MODEL=gpt-4.1-mini
 OPENAI_API_KEY=your_openai_api_key
 ENABLE_OPENAI_WEB_SEARCH=true
 ```
 
-the agent will make one low-cost LLM call for the already-ranked finalists. That call is only used to:
+the LangChain enrichment step will make one structured LLM call for the already-ranked finalists. That call is only used to:
 
 - look at subjective criteria fit for the finalists
 - add field-level `0` to `10` scores and comments for safety, neighborhood, appreciation, schools, commute, value, condition, and risk
-- use web-search grounding for safety/neighborhood and appreciation context when enabled
+- include concise source notes for safety/neighborhood and appreciation context when available
 - draft a short intro paragraph for the email
 
-The OpenAI step is optional and does not control ranking order. Deterministic scoring remains the primary ranking method.
+The LangChain step is optional and does not control ranking order. Deterministic scoring remains the primary ranking method.
 
 ## Scheduling
 

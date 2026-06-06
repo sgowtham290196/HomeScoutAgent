@@ -10,11 +10,7 @@ import signal
 import time
 
 from agent.config import AgentConfig, load_config
-from agent.emailer import send_email
-from agent.fetcher import fetch_properties
-from agent.llm_scorer import enrich_finalists_with_llm
-from agent.scoring import rank_properties
-from agent.tracker import append_new_report_entries
+from agent.langchain_agent import run_home_scout_agent
 
 PID_FILE = Path(".agent_scheduler.pid")
 
@@ -38,23 +34,13 @@ def run_agent_once(config: AgentConfig | None = None) -> None:
     config = config or load_config()
     logger.info("Loaded config for %s locations", len(config.real_estate_locations))
 
-    raw_df, deduped_df, filtered_df = fetch_properties(config)
-    logger.info("Fetched %s raw properties", len(raw_df))
-    logger.info("Deduplicated to %s properties", len(deduped_df))
-    logger.info("Filtered down to %s properties", len(filtered_df))
-    fetch_failures = filtered_df.attrs.get("fetch_failures", [])
-    if fetch_failures:
-        logger.warning("Fetch failures: %s", "; ".join(fetch_failures))
+    result = run_home_scout_agent(config)
 
-    ranked_df = rank_properties(filtered_df, config)
-    ranked_df.attrs["fetch_failures"] = fetch_failures
-    enriched_df = enrich_finalists_with_llm(ranked_df, config)
-    enriched_df.attrs["fetch_failures"] = fetch_failures
-    new_tracker_rows = append_new_report_entries(enriched_df, config)
-
-    logger.info("Prepared top %s properties for email", len(enriched_df))
-    logger.info("Added %s new properties to report tracker", len(new_tracker_rows))
-    send_email(enriched_df, config)
+    logger.info("Fetched %s raw properties", len(result.raw_df))
+    logger.info("Deduplicated to %s properties", len(result.deduped_df))
+    logger.info("Filtered down to %s properties", len(result.filtered_df))
+    logger.info("Prepared top %s properties for email", len(result.enriched_df))
+    logger.info("Added %s new properties to report tracker", len(result.new_tracker_rows))
 
 
 def _parse_schedule_parts(schedule_time: str) -> tuple[int, int]:

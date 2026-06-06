@@ -155,6 +155,10 @@ class AgentConfig(BaseModel):
     enable_openai_web_search: bool = True
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    langchain_provider: str = "openai"
+    langchain_model: str = "gpt-4.1-mini"
+    langchain_temperature: float = 0.0
+    langchain_api_key: str | None = None
     report_tracker_path: str = "reports/live_report_tracker.csv"
     schedule_time: str = "17:00"
     update_frequency: str = "daily"
@@ -189,6 +193,14 @@ class AgentConfig(BaseModel):
         normalized = value.strip().lower()
         if normalized not in {"daily", "hourly"}:
             raise ValueError("UPDATE_FREQUENCY must be either 'daily' or 'hourly'.")
+        return normalized
+
+    @field_validator("langchain_provider")
+    @classmethod
+    def normalize_langchain_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"openai"}:
+            raise ValueError("LANGCHAIN_PROVIDER currently supports 'openai'.")
         return normalized
 
     @field_validator("schedule_time")
@@ -237,6 +249,8 @@ class AgentConfig(BaseModel):
             raise ValueError("TOP_N must be positive.")
         if self.past_days <= 0:
             raise ValueError("PAST_DAYS must be positive.")
+        if self.langchain_temperature < 0:
+            raise ValueError("LANGCHAIN_TEMPERATURE cannot be negative.")
 
         school_rating_fields = [
             "min_assigned_primary_school_rating",
@@ -267,6 +281,7 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
     past_days = _parse_int(env.get("PAST_DAYS"), "PAST_DAYS")
     limit_per_location = _parse_int(env.get("LIMIT_PER_LOCATION"), "LIMIT_PER_LOCATION")
     top_n = _parse_int(env.get("TOP_N"), "TOP_N")
+    langchain_temperature = _parse_float(env.get("LANGCHAIN_TEMPERATURE"), "LANGCHAIN_TEMPERATURE")
     min_middle_school_rating = _parse_int(
         env.get("MIN_ASSIGNED_MIDDLE_SCHOOL_RATING") or env.get("MIN_ASSIGNED_MID_SCHOOL_RATING"),
         "MIN_ASSIGNED_MIDDLE_SCHOOL_RATING",
@@ -312,6 +327,10 @@ def _config_values(env: Mapping[str, Any]) -> dict[str, Any]:
         "enable_openai_web_search": _parse_bool(env.get("ENABLE_OPENAI_WEB_SEARCH"), default=True),
         "openai_api_key": env.get("OPENAI_API_KEY"),
         "openai_model": env.get("OPENAI_MODEL") or "gpt-4.1-mini",
+        "langchain_provider": env.get("LANGCHAIN_PROVIDER") or "openai",
+        "langchain_model": env.get("LANGCHAIN_MODEL") or env.get("OPENAI_MODEL") or "gpt-4.1-mini",
+        "langchain_temperature": 0.0 if langchain_temperature is None else langchain_temperature,
+        "langchain_api_key": env.get("LANGCHAIN_API_KEY") or env.get("OPENAI_API_KEY"),
         "report_tracker_path": env.get("REPORT_TRACKER_PATH") or "reports/live_report_tracker.csv",
         "schedule_time": env.get("SCHEDULE_TIME") or "17:00",
         "update_frequency": env.get("UPDATE_FREQUENCY") or "daily",

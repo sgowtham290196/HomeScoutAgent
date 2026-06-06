@@ -8,8 +8,10 @@ import pytest
 
 from agent.config import load_config
 from agent.emailer import build_email_message, render_html_email, render_text_email, send_email
-from agent.main import SchedulerAlreadyRunning, _next_run_time, _write_pid_file, main
 from agent.fetcher import deduplicate_properties, fetch_properties
+from agent.langchain_agent import run_home_scout_agent
+from agent.llm_scorer import FieldAssessment, FinalistAssessmentBatch, ListingAssessment, enrich_finalists_with_llm
+from agent.main import SchedulerAlreadyRunning, _next_run_time, _write_pid_file, main
 from agent.scoring import rank_properties, score_properties
 from agent.tracker import append_new_report_entries, report_columns
 from homeharvest.core.scrapers import Scraper, ScraperInput
@@ -46,6 +48,9 @@ def sample_env(**overrides: str) -> dict[str, str]:
         "ENABLE_OPENAI_SCORING": "false",
         "ENABLE_OPENAI_WEB_SEARCH": "true",
         "OPENAI_MODEL": "gpt-4.1-mini",
+        "LANGCHAIN_PROVIDER": "openai",
+        "LANGCHAIN_MODEL": "gpt-4.1-mini",
+        "LANGCHAIN_TEMPERATURE": "0",
         "REPORT_TRACKER_PATH": "reports/live_report_tracker.csv",
         "SCHEDULE_TIME": "17:00",
         "UPDATE_FREQUENCY": "daily",
@@ -156,6 +161,9 @@ def test_config_parsing_supports_semicolon_locations() -> None:
     assert config.min_assigned_middle_school_rating == 8
     assert config.min_assigned_high_school_rating == 8
     assert config.enable_openai_web_search is True
+    assert config.langchain_provider == "openai"
+    assert config.langchain_model == "gpt-4.1-mini"
+    assert config.langchain_temperature == 0
     assert config.report_tracker_path == "reports/live_report_tracker.csv"
     assert config.dry_run is True
 
@@ -166,6 +174,9 @@ def test_schedule_config_validation() -> None:
 
     with pytest.raises(ValueError, match="UPDATE_FREQUENCY must be either 'daily' or 'hourly'"):
         load_config(sample_env(UPDATE_FREQUENCY="weekly"))
+
+    with pytest.raises(ValueError, match="LANGCHAIN_PROVIDER currently supports 'openai'"):
+        load_config(sample_env(LANGCHAIN_PROVIDER="unsupported"))
 
 
 def test_next_run_time_daily_and_hourly() -> None:
@@ -286,6 +297,79 @@ def test_fetch_properties_continues_after_location_failure(monkeypatch) -> None:
     assert len(deduped_df) == 2
     assert len(filtered_df) == 2
     assert filtered_df.attrs["fetch_failures"] == ["Sunnyvale, CA: temporary upstream failure"]
+
+
+def test_langchain_enrichment_uses_structured_output(monkeypatch) -> None:
+    config = load_config(
+        sample_env(
+            ENABLE_OPENAI_SCORING="true",
+            OPENAI_API_KEY="test-key",
+            LANGCHAIN_MODEL="gpt-test",
+        )
+    )
+    ranked = rank_properties(sample_dataframe(), config)
+
+    class FakeChatModel:
+        def with_structured_output(self, schema):
+            self.schema = schema
+            return self
+
+        def invoke(self, prompt):
+            assert "Return one structured item per listing" in prompt
+            return FinalistAssessmentBatch(
+                email_intro="Two strong options surfaced today.",
+                listings=[
+                    ListingAssessment(
+                        summary="Updated home with strong fundamentals.",
+                        criteria_match="Matches schools and value preferences.",
+                        possible_concern="Review commute at rush hour.",
+                        research_sources=["local school profile"],
+                        safety=FieldAssessment(score=8, comment="Public context appears favorable."),
+                        appreciation=FieldAssessment(score=7, comment="Demand appears steady."),
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("agent.llm_scorer.create_chat_model", MagicMock(return_value=FakeChatModel()))
+
+    enriched = enrich_finalists_with_llm(ranked, config)
+
+    assert enriched.attrs["llm_email_intro"] == "Two strong options surfaced today."
+    assert enriched.loc[0, "llm_summary"] == "Updated home with strong fundamentals."
+    assert enriched.loc[0, "llm_safety_score"] == 8
+    assert enriched.loc[0, "llm_safety_comment"] == "Public context appears favorable."
+    assert enriched.loc[0, "llm_research_sources"] == "local school profile"
+
+
+def test_langchain_agent_orchestrates_existing_pipeline(monkeypatch) -> None:
+    config = load_config(sample_env())
+    raw_df = sample_dataframe()
+    deduped_df = raw_df.head(2).copy()
+    filtered_df = raw_df.head(1).copy()
+    filtered_df.attrs["fetch_failures"] = ["Sunnyvale, CA: temporary upstream failure"]
+    ranked_df = rank_properties(filtered_df, config)
+    enriched_df = ranked_df.copy()
+    tracker_rows = pd.DataFrame([{"House": "123 Main St"}])
+
+    monkeypatch.setattr(
+        "agent.langchain_agent.fetch_properties",
+        MagicMock(return_value=(raw_df, deduped_df, filtered_df)),
+    )
+    monkeypatch.setattr("agent.langchain_agent.rank_properties", MagicMock(return_value=ranked_df))
+    monkeypatch.setattr("agent.langchain_agent.enrich_finalists_with_llm", MagicMock(return_value=enriched_df))
+    monkeypatch.setattr("agent.langchain_agent.append_new_report_entries", MagicMock(return_value=tracker_rows))
+    send_mock = MagicMock()
+    monkeypatch.setattr("agent.langchain_agent.send_email", send_mock)
+
+    result = run_home_scout_agent(config)
+
+    assert len(result.raw_df) == 3
+    assert len(result.deduped_df) == 2
+    assert len(result.filtered_df) == 1
+    assert result.ranked_df.attrs["fetch_failures"] == ["Sunnyvale, CA: temporary upstream failure"]
+    assert result.enriched_df.attrs["fetch_failures"] == ["Sunnyvale, CA: temporary upstream failure"]
+    assert len(result.new_tracker_rows) == 1
+    send_mock.assert_called_once()
 
 
 def test_scraper_honors_extra_property_data_flag() -> None:
