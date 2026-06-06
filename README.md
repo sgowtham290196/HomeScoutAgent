@@ -1,108 +1,162 @@
 # HomeScoutAgent
 
-HomeScoutAgent is a LangChain-powered daily real estate email agent built on top of the existing HomeHarvest scraper.
+HomeScoutAgent is a LangChain-powered real estate scouting assistant that turns daily property searches into a ranked, explainable email report.
 
-It searches Realtor.com listings through `homeharvest.scrape_property()`, applies hard filters from `.env`, ranks the best matches with transparent deterministic scoring, uses LangChain for optional finalist analysis, and sends a daily email with the top picks.
+The project combines deterministic filtering and scoring with optional LLM analysis. The deterministic layer decides which homes rank highest; LangChain adds concise finalist commentary, field-level risk/value notes, and an email-ready summary without taking control of ranking or side effects.
 
-## What This Project Does
+## Why This Project Matters
 
-- searches multiple locations every day
-- filters by price, beds, baths, sqft, lot size, year built, property type, and HOA
-- deduplicates overlapping listings across nearby cities
-- scores listings from `0` to `100`
-- explains each score with `score_reason`
-- highlights issues with `red_flags`
-- optionally uses one compact LLM pass for finalist subjective-fit notes, field-level scores/comments, and a short email intro
-- appends the daily top picks to a live CSV tracker while skipping homes already seen on prior runs
-- sends a plain text and HTML email, or prints the result in dry-run mode
+Real estate search tools are noisy. A buyer often has to check multiple cities, filter out stale or poor-fit listings, compare tradeoffs, and keep track of what has already been reviewed. HomeScoutAgent automates that workflow:
+
+- Searches multiple Realtor.com locations on a schedule.
+- Applies hard filters for budget, beds, baths, square footage, lot size, year built, HOA, property type, and school ratings.
+- Deduplicates overlapping listings across nearby cities.
+- Scores every candidate with transparent, deterministic logic.
+- Uses LangChain for optional qualitative finalist analysis.
+- Sends an HTML and plain-text email with the best homes.
+- Maintains a readable CSV tracker and skips homes already seen on prior runs.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Config["Environment Config"] --> Agent["LangChain Tool Orchestrator"]
+    Agent --> Fetch["Fetch Listings"]
+    Fetch --> Filter["Filter And Deduplicate"]
+    Filter --> Score["Deterministic Scoring"]
+    Score --> Enrich["Optional LangChain Analysis"]
+    Enrich --> Tracker["CSV Tracker"]
+    Tracker --> Email["Daily Email Report"]
+```
+
+The orchestration lives in `agent/langchain_agent.py`. LangChain wraps the workflow steps as tools, while the core business logic stays in normal Python modules. This keeps the system easy to test and prevents the LLM from inventing listing data, changing ranking order, or sending email outside the controlled pipeline.
+
+## Feature Highlights
+
+- **Explainable ranking:** Every property gets a `score`, `score_reason`, `score_breakdown`, `detailed_analysis`, and `red_flags`.
+- **LangChain integration:** Finalist summaries use structured LangChain output so downstream email and tracker fields remain stable.
+- **Provider-ready model layer:** `agent/langchain_models.py` centralizes model creation. OpenAI is the default provider today.
+- **Production-minded workflow:** The job supports dry runs, scheduled local runs, GitHub Actions runs, test gates, dependency auditing, and tracker artifacts.
+- **Human-readable tracking:** The report tracker is intentionally easy to review instead of being a raw data dump.
+- **Safety-first side effects:** Email sending and tracker writes happen through deterministic Python functions, not open-ended LLM decisions.
 
 ## Project Structure
 
 ```text
 agent/
-  config.py        Load and validate environment variables
-  fetcher.py       Fetch listings with HomeHarvest and deduplicate them
-  scoring.py       Deterministic scoring and ranking
-  langchain_agent.py LangChain tool orchestration for the daily workflow
-  langchain_models.py Configurable LangChain chat model factory
-  llm_scorer.py    LangChain-powered finalist summaries
-  tracker.py       Live report tracker persistence and repeat skipping
-  emailer.py       HTML/plain text email rendering and SMTP sending
-  main.py          Main entrypoint
+  config.py             Environment parsing and validation
+  fetcher.py            Realtor.com listing fetch, filtering, and deduplication
+  scoring.py            Deterministic scoring and ranking
+  langchain_agent.py    LangChain tool orchestration for the daily workflow
+  langchain_models.py   Configurable LangChain chat model factory
+  llm_scorer.py         Structured LangChain finalist analysis
+  tracker.py            CSV tracker persistence and duplicate skipping
+  emailer.py            HTML/plain-text email rendering and SMTP sending
+  main.py               CLI entrypoint and local scheduler
 
-homeharvest/       Existing scraping library
-tests/             Tests for scraper behavior and the new agent layer
+homeharvest/            Bundled HomeHarvest scraping library
+tests/                  Unit tests plus optional live integration tests
+.github/workflows/      Scheduled GitHub Actions workflow
 ```
 
-## Requirements
+## Quick Start
 
-- Python 3.10+
-- SMTP account for sending email
-- optional OpenAI API key if you want finalist summaries
-
-## Installation
+### 1. Install
 
 ```bash
-python3 -m pip install -e .
+python -m pip install -e .
 ```
 
-If you prefer a non-editable install:
+### 2. Configure
+
+Copy the example environment file and fill in your values:
 
 ```bash
-python3 -m pip install .
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+### 3. Run A Dry Run
+
+Set `DRY_RUN=true` in `.env`, then run:
+
+```bash
+python -m agent.main
+```
+
+Dry-run mode prints the email content instead of sending it. This is the safest first check after changing filters, email settings, or LangChain configuration.
+
+### 4. Send A Real Email
+
+After the dry run looks correct, set:
+
+```env
+DRY_RUN=false
+```
+
+Then run:
+
+```bash
+python -m agent.main
 ```
 
 ## Configuration
 
-Copy [`.env.example`](</Users/goth/Desktop/Projects /Bay_Area_Housing_Analysis/.env.example>) to `.env` and fill it in.
-
-The real `.env` file is ignored by Git. The example file stays committed.
+The app is configured through environment variables. The real `.env` file is ignored by Git; `.env.example` is safe to commit.
 
 ### Required Variables
 
-- `REAL_ESTATE_LOCATIONS`
-- `PRICE_MIN`
-- `PRICE_MAX`
-- `EMAIL_FROM`
-- `EMAIL_TO`
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD`
+| Variable | Purpose |
+| --- | --- |
+| `REAL_ESTATE_LOCATIONS` | Semicolon-separated search locations, such as `Santa Clara, CA;Sunnyvale, CA` |
+| `PRICE_MIN` | Minimum listing price |
+| `PRICE_MAX` | Maximum listing price |
+| `EMAIL_FROM` | Sender email address |
+| `EMAIL_TO` | One or more recipients, comma-separated |
+| `SMTP_HOST` | SMTP server host |
+| `SMTP_PORT` | SMTP server port |
+| `SMTP_USERNAME` | SMTP login username |
+| `SMTP_PASSWORD` | SMTP login password or app password |
 
-`EMAIL_TO` can contain multiple recipients separated by commas.
+### Important Optional Variables
 
-### Optional Variables
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LISTING_TYPE` | `for_sale` | Listing type passed to HomeHarvest |
+| `PROPERTY_TYPES` | empty | Comma-separated property types |
+| `BEDS_MIN`, `BEDS_MAX` | empty | Bedroom range |
+| `BATHS_MIN`, `BATHS_MAX` | empty | Bathroom range |
+| `SQFT_MIN`, `SQFT_MAX` | empty | Interior square-footage range |
+| `LOT_SQFT_MIN`, `LOT_SQFT_MAX` | empty | Lot-size range |
+| `YEAR_BUILT_MIN`, `YEAR_BUILT_MAX` | empty | Year-built range |
+| `HOA_MAX` | empty | Maximum HOA fee |
+| `MIN_ASSIGNED_PRIMARY_SCHOOL_RATING` | `8` | Minimum assigned primary/elementary school rating |
+| `MIN_ASSIGNED_MIDDLE_SCHOOL_RATING` | `8` | Minimum assigned middle school rating |
+| `MIN_ASSIGNED_HIGH_SCHOOL_RATING` | `8` | Minimum assigned high school rating |
+| `PAST_DAYS` | `7` | Listing freshness window |
+| `LIMIT_PER_LOCATION` | `100` | Max listings fetched per location |
+| `TOP_N` | `5` | Number of homes included in the report |
+| `REPORT_TRACKER_PATH` | `reports/live_report_tracker.csv` | CSV tracker location |
+| `DRY_RUN` | `false` | Print email instead of sending it |
 
-- `LISTING_TYPE`
-- `PROPERTY_TYPES`
-- `BEDS_MIN`, `BEDS_MAX`
-- `BATHS_MIN`, `BATHS_MAX`
-- `SQFT_MIN`, `SQFT_MAX`
-- `LOT_SQFT_MIN`, `LOT_SQFT_MAX`
-- `YEAR_BUILT_MIN`, `YEAR_BUILT_MAX`
-- `HOA_MAX`
-- `MIN_ASSIGNED_PRIMARY_SCHOOL_RATING`
-- `MIN_ASSIGNED_MIDDLE_SCHOOL_RATING`
-- `MIN_ASSIGNED_HIGH_SCHOOL_RATING`
-- `PAST_DAYS`
-- `LIMIT_PER_LOCATION`
-- `TOP_N`
-- `SUBJECTIVE_CRITERIA`
-- `POSITIVE_KEYWORDS`
-- `NEGATIVE_KEYWORDS`
-- `ENABLE_OPENAI_SCORING`
-- `ENABLE_OPENAI_WEB_SEARCH`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `LANGCHAIN_PROVIDER`
-- `LANGCHAIN_MODEL`
-- `LANGCHAIN_TEMPERATURE`
-- `LANGCHAIN_API_KEY`
-- `REPORT_TRACKER_PATH`
-- `SCHEDULE_TIME`
-- `UPDATE_FREQUENCY`
-- `DRY_RUN`
+### LangChain And LLM Settings
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ENABLE_OPENAI_SCORING` | `false` | Enables optional LangChain finalist analysis. The name is retained for backward compatibility. |
+| `LANGCHAIN_PROVIDER` | `openai` | LLM provider. OpenAI is currently supported. |
+| `LANGCHAIN_MODEL` | `OPENAI_MODEL` or `gpt-4.1-mini` | Model used by LangChain |
+| `LANGCHAIN_TEMPERATURE` | `0` | Model temperature |
+| `LANGCHAIN_API_KEY` | `OPENAI_API_KEY` | Provider API key override |
+| `OPENAI_API_KEY` | empty | OpenAI API key |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Backward-compatible model setting |
+
+If `ENABLE_OPENAI_SCORING=true` but no API key is configured, the app logs a warning and safely skips LLM enrichment. The deterministic ranking and email workflow still run.
 
 ## Example `.env`
 
@@ -127,18 +181,17 @@ PAST_DAYS=7
 LIMIT_PER_LOCATION=100
 TOP_N=5
 
-SUBJECTIVE_CRITERIA=Prefer homes with good resale potential, low HOA, safe neighborhood, good schools, reasonable commute to San Jose or Santa Clara, newer or remodeled condition, and strong value relative to price per square foot.
+SUBJECTIVE_CRITERIA=Prefer homes with good resale potential, low HOA, safe neighborhood, good schools, reasonable commute, newer or remodeled condition, and strong value relative to price per square foot.
 POSITIVE_KEYWORDS=remodeled,updated,excellent schools,quiet,new roof,solar,corner lot,move-in ready
 NEGATIVE_KEYWORDS=fixer,TLC,as-is,auction,needs work,fire damage,foundation
 
 ENABLE_OPENAI_SCORING=false
-ENABLE_OPENAI_WEB_SEARCH=true
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4.1-mini
 LANGCHAIN_PROVIDER=openai
 LANGCHAIN_MODEL=gpt-4.1-mini
 LANGCHAIN_TEMPERATURE=0
+OPENAI_API_KEY=
 LANGCHAIN_API_KEY=
+
 REPORT_TRACKER_PATH=reports/live_report_tracker.csv
 SCHEDULE_TIME=17:00
 UPDATE_FREQUENCY=daily
@@ -153,98 +206,21 @@ SMTP_PASSWORD=your_gmail_app_password
 DRY_RUN=true
 ```
 
-## How To Use
+## How Ranking Works
 
-### Run locally
+The LLM does not decide the ranking. Homes are ranked deterministically using:
 
-```bash
-python -m agent.main
-```
+- Price position within the configured budget.
+- Price per square foot compared with the fetched result-set median.
+- Square footage and bed/bath fit.
+- Year built.
+- HOA fee.
+- Assigned GreatSchools ratings.
+- Days on market.
+- Positive and negative keyword matches.
+- Overlap with the subjective criteria text.
 
-or:
-
-```bash
-python3 -m agent.main
-```
-
-### Run in dry mode
-
-```bash
-DRY_RUN=true python -m agent.main
-```
-
-Dry mode prints the full email content instead of sending it.
-
-### Configure local schedule
-
-The built-in local scheduler uses:
-
-- `SCHEDULE_TIME=17:00` by default
-- `UPDATE_FREQUENCY=daily` by default
-
-Supported frequencies:
-
-- `daily`
-- `hourly`
-
-For `daily`, `SCHEDULE_TIME` is the 24-hour send time.
-For `hourly`, the minute portion of `SCHEDULE_TIME` is used.
-
-This local scheduler only works while your machine is awake and the process is still running.
-
-### Run on Windows
-
-Use the batch launcher:
-
-```bat
-run_daily_agent.bat
-```
-
-This sends one email immediately, then keeps the agent running and sends again on the configured schedule.
-
-### Run on macOS or Linux
-
-Use the clickable Finder launcher:
-
-```bash
-run_daily_agent.command
-```
-
-This sends one email immediately, then keeps the agent running and sends again on the configured schedule.
-
-### Stop the local scheduler
-
-Windows:
-
-```bat
-stop_daily_agent.bat
-```
-
-macOS from Finder:
-
-```bash
-stop_daily_agent.command
-```
-
-## How Scoring Works
-
-The agent does not hide ranking inside an LLM.
-
-Each property is scored deterministically using:
-
-- affordability within your price range
-- price per sqft versus the fetched set median
-- home size
-- beds and baths fit
-- year built
-- HOA
-- assigned elementary/primary, middle, and high school GreatSchools ratings
-- days on market
-- positive keyword matches
-- negative keyword penalties
-- overlap with your subjective criteria text
-
-Each ranked property includes:
+Each finalist includes:
 
 - `score`
 - `score_reason`
@@ -252,123 +228,150 @@ Each ranked property includes:
 - `score_breakdown`
 - `detailed_analysis`
 
+This design makes the output explainable and reviewable. LangChain adds narrative context after the deterministic ranking is complete.
+
+## Email Report
+
+Each email includes:
+
+- Search criteria.
+- Fetch warnings if one location fails but others succeed.
+- Ranked properties with score, price, address, beds, baths, square footage, HOA, days on market, and links.
+- Explanation of why each home ranked.
+- Possible concerns and red flags.
+- Optional LangChain field scores for safety, neighborhood, appreciation, schools, commute, value, condition, and risk.
+- Primary photo when available.
+
+The email is generated in both plain text and HTML.
+
 ## Live Report Tracker
 
-Each run appends the ranked top picks to `REPORT_TRACKER_PATH`, which defaults to:
+Each run appends new top picks to `REPORT_TRACKER_PATH`, which defaults to:
 
 ```text
 reports/live_report_tracker.csv
 ```
 
-The tracker is intentionally readable rather than a raw data export. Its first columns are `House` and `Address`, followed by overall and LLM score/comment pairs such as `Safety Score`, `Safety Comment`, `Appreciation Score`, and `Appreciation Comment`. The final column is `Zillow Link`. If the same home appears again on the next day or any later run, it is skipped instead of duplicated. Older raw tracker files are rewritten into this simplified shape on the next run.
+The tracker is intentionally readable. It starts with `House`, `Address`, `Overall Score`, and `Overall Comment`, then includes field-level LangChain score/comment pairs such as `Safety Score`, `Safety Comment`, `Appreciation Score`, and `Appreciation Comment`. The final column is `Zillow Link`.
 
-Assigned-school filters use the GreatSchools rating fields returned in Realtor school data. `MIN_ASSIGNED_PRIMARY_SCHOOL_RATING`, `MIN_ASSIGNED_MIDDLE_SCHOOL_RATING`, and `MIN_ASSIGNED_HIGH_SCHOOL_RATING` default to `8`, so a listing must have all three assigned-school ratings at `8/10` or better to remain in the daily candidate set.
+If the same home appears again in a later run, it is skipped instead of duplicated.
 
-## Email Output
+## Running On A Schedule
 
-Each daily email includes:
+### Local Scheduler
 
-- score
-- address
-- price
-- beds, baths, sqft
-- year built
-- HOA
-- price per sqft
-- days on market
-- listing URL
-- reason for ranking
-- possible concerns
-- primary photo when available
-- supports multiple recipients via comma-separated `EMAIL_TO`
+Run once immediately, then keep the scheduler alive:
 
-## Optional LangChain Finalist Analysis
+```bash
+python -m agent.main --run-now-and-schedule
+```
 
-If you set:
+The local scheduler uses:
+
+- `SCHEDULE_TIME`, for example `17:00`
+- `UPDATE_FREQUENCY`, either `daily` or `hourly`
+
+The local scheduler only works while the machine is awake and the process is running.
+
+### Convenience Launchers
+
+Windows:
+
+```bat
+run_daily_agent.bat
+```
+
+macOS/Linux:
+
+```bash
+./run_daily_agent.command
+```
+
+Stop the local scheduler:
+
+```bash
+python -m agent.main --stop-scheduler
+```
+
+## GitHub Actions
+
+The workflow in `.github/workflows/daily-real-estate-agent.yml` supports:
+
+- Manual runs through `workflow_dispatch`.
+- Daily scheduled cloud runs.
+- Unit tests before the scheduled agent runs.
+- Ruff lint checks.
+- Mypy type checks.
+- Dependency auditing.
+- Report tracker cache restore.
+- Report tracker artifact upload.
+
+For cloud runs, add the same values from `.env` as GitHub Actions secrets, then set:
 
 ```env
-ENABLE_OPENAI_SCORING=true
-LANGCHAIN_PROVIDER=openai
-LANGCHAIN_MODEL=gpt-4.1-mini
-OPENAI_API_KEY=your_openai_api_key
-ENABLE_OPENAI_WEB_SEARCH=true
+DRY_RUN=false
 ```
 
-the LangChain enrichment step will make one structured LLM call for the already-ranked finalists. That call is only used to:
+The workflow schedule is controlled by the cron expression in the workflow file. `SCHEDULE_TIME` and `UPDATE_FREQUENCY` only apply to the local scheduler.
 
-- look at subjective criteria fit for the finalists
-- add field-level `0` to `10` scores and comments for safety, neighborhood, appreciation, schools, commute, value, condition, and risk
-- include concise source notes for safety/neighborhood and appreciation context when available
-- draft a short intro paragraph for the email
+## Testing
 
-The LangChain step is optional and does not control ranking order. Deterministic scoring remains the primary ranking method.
+Run the default test suite:
 
-## Scheduling
-
-### GitHub Actions
-
-This repo includes:
-
-- [`.github/workflows/daily-real-estate-agent.yml`](</Users/goth/Desktop/Projects /Bay_Area_Housing_Analysis/.github/workflows/daily-real-estate-agent.yml>)
-
-It supports:
-
-- daily cloud runs that do not depend on your Mac being open
-- manual runs with `workflow_dispatch`
-
-Store your configuration values in GitHub Actions Secrets.
-
-Recommended always-on setup:
-
-1. push this repo to GitHub
-2. open your repo `Settings` -> `Secrets and variables` -> `Actions`
-3. add the same values from `.env` as repository secrets
-4. set `DRY_RUN=false`
-5. let GitHub Actions run the workflow daily in the cloud
-
-Default workflow timing:
-
-- the workflow is set to `00:00 UTC`
-- that is `5:00 PM Pacific` during daylight time
-- during standard time it will run at `4:00 PM Pacific`
-
-Important:
-
-- `SCHEDULE_TIME` and `UPDATE_FREQUENCY` are for the local launcher-based scheduler
-- the GitHub Actions schedule is controlled by the workflow cron expression, not `.env`
-
-### Local cron example
-
-```cron
-0 7 * * * cd /path/to/HomeScoutAgent && /usr/bin/env python -m agent.main >> real-estate-agent.log 2>&1
+```bash
+python -m pytest
 ```
+
+Run lint and type checks:
+
+```bash
+ruff check agent tests/test_agent.py
+mypy agent
+```
+
+Live Realtor.com integration tests are marked as `integration` and skipped by default. Run them explicitly only when you want to test against live external data:
+
+```bash
+python -m pytest -m integration
+```
+
+## Production Readiness Notes
+
+This project is designed for reliable personal automation and public demonstration:
+
+- Configuration is validated with Pydantic.
+- External fetch failures are captured per location so one bad location does not automatically cancel the whole report.
+- The app supports dry-run mode before sending real email.
+- LLM enrichment is optional and fails closed.
+- CI runs tests, lint, type checks, and dependency audit.
+- Secrets are expected to live in `.env` locally or GitHub Actions secrets in the cloud.
+
+External dependencies still matter. A live run depends on Realtor.com availability, SMTP availability, valid credentials, and optional LLM provider access.
 
 ## SMTP Notes
 
 For Gmail:
 
-1. enable 2-Step Verification
-2. create a Gmail App Password
-3. use that App Password as `SMTP_PASSWORD`
-4. set `SMTP_HOST=smtp.gmail.com`
-5. set `SMTP_PORT=587`
-
-## Testing
-
-Run the agent tests with:
-
-```bash
-python3 -m pytest tests/test_agent.py
-```
+1. Enable 2-Step Verification.
+2. Create a Gmail App Password.
+3. Use that App Password as `SMTP_PASSWORD`.
+4. Set `SMTP_HOST=smtp.gmail.com`.
+5. Set `SMTP_PORT=587`.
 
 ## Compliance
 
-This project uses the existing HomeHarvest Realtor.com scraping interface as-is.
+This project uses the HomeHarvest Realtor.com scraping interface as-is.
 
-- it does not scrape Zillow directly
-- it does not bypass anti-bot protections
-- users are responsible for complying with the terms of the source websites and email providers they use
+- It does not scrape Zillow directly.
+- It does not bypass anti-bot protections.
+- Users are responsible for complying with the terms of the source websites, LLM providers, and email providers they use.
 
-## Library Note
+## Roadmap
 
-The original `homeharvest.scrape_property()` behavior is preserved. The new agent is a separate application layer under `agent/`.
+Potential future improvements:
+
+- Additional LangChain providers beyond OpenAI.
+- A small dashboard for reviewing tracker history.
+- Richer neighborhood-level data sources.
+- Notification channels beyond email.
+- Stronger artifact persistence for long-running cloud deployments.
